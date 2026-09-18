@@ -701,6 +701,167 @@ def create_app(data_dir: Path) -> FastAPI:
             "infeasibility_report": result.infeasibility_report,
         }
 
+    # ---- decision register (M4, spec §19) ---------------------------------
+    @app.post("/v1/decisions", status_code=201)
+    async def create_decision_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
+            raise HTTPException(401, "demo authentication missing")
+        body = await request.json()
+        from .register import (
+            DECISION_SCHEMA, CounterevidenceCheck, CounterevidenceState,
+            DecisionBrief, create_decision as _create,
+        )
+        try:
+            conn = store.conn
+            conn.executescript(DECISION_SCHEMA)
+            brief = DecisionBrief(**body["brief"])
+            ce = [
+                CounterevidenceCheck(hypothesis=c["hypothesis"], state=CounterevidenceState(c["state"]), detail=c.get("detail"))
+                for c in body.get("counterevidence", [])
+            ]
+            rec = _create(conn, x_tenant, body["title"], brief, x_user, counterevidence=ce)
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_decision", "detail": str(e)}))
+        store.audit(x_tenant, x_user, "decision.create", rec.id, "created", {"title": body["title"]})
+        return _decision_to_dict(rec)
+
+    @app.get("/v1/decisions")
+    async def list_decisions_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
+            raise HTTPException(401, "demo authentication missing")
+        from .register import DECISION_SCHEMA, list_decisions as _list
+        store.conn.executescript(DECISION_SCHEMA)
+        recs = _list(store.conn, x_tenant)
+        return [_decision_to_dict(r) for r in recs]
+
+    @app.get("/v1/decisions/{decision_id}")
+    async def get_decision_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
+            raise HTTPException(401, "demo authentication missing")
+        from .register import DECISION_SCHEMA, get_decision as _get
+        store.conn.executescript(DECISION_SCHEMA)
+        rec = _get(store.conn, x_tenant, decision_id)
+        if rec is None:
+            raise HTTPException(404, "not found")  # §23.4
+        return _decision_to_dict(rec)
+
+    @app.post("/v1/decisions/{decision_id}/transition")
+    async def transition_decision_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
+            raise HTTPException(401, "demo authentication missing")
+        body = await request.json()
+        from .register import DECISION_SCHEMA, DecisionStatus, transition_status
+        store.conn.executescript(DECISION_SCHEMA)
+        try:
+            rec = transition_status(store.conn, x_tenant, decision_id, DecisionStatus(body["status"]), x_user, body.get("reason", ""))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+        store.audit(x_tenant, x_user, "decision.transition", decision_id, "success", {"to_status": body["status"]})
+        return _decision_to_dict(rec)
+
+    @app.post("/v1/decisions/{decision_id}/outcome")
+    async def outcome_decision_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
+            raise HTTPException(401, "demo authentication missing")
+        body = await request.json()
+        from .register import DECISION_SCHEMA, OutcomeRecord, Verdict, record_outcome
+        store.conn.executescript(DECISION_SCHEMA)
+        try:
+            outcome = OutcomeRecord(
+                observed_results=body.get("observed_results", {}),
+                pinned_definition_version=body.get("pinned_definition_version"),
+                data_revision=body.get("data_revision"),
+                measurement_window=body.get("measurement_window", ""),
+                expectation=body.get("expectation", ""),
+                estimated_effect=body.get("estimated_effect"),
+                study_run=body.get("study_run"),
+                data_quality_caveats=body.get("data_quality_caveats", []),
+                review_verdict=Verdict(body["review_verdict"]),
+                verdict_evidence=body.get("verdict_evidence", ""),
+            )
+            rec = record_outcome(store.conn, x_tenant, decision_id, outcome, x_user, body.get("reason", "Evaluated"))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_outcome", "detail": str(e)}))
+        store.audit(x_tenant, x_user, "decision.outcome", decision_id, "recorded", {"verdict": body["review_verdict"]})
+        return _decision_to_dict(rec)
+
+    def _decision_to_dict(rec) -> dict:
+        from .register import DecisionRecord
+        return {
+            "id": rec.id,
+            "tenant_id": rec.tenant_id,
+            "title": rec.title,
+            "status": rec.status.value if hasattr(rec.status, "value") else rec.status,
+            "brief": {
+                "problem": rec.brief.problem,
+                "relevant_findings": rec.brief.relevant_findings,
+                "proposed_action": rec.brief.proposed_action,
+                "baseline_option": rec.brief.baseline_option,
+                "scope": rec.brief.scope,
+                "owner": rec.brief.owner,
+                "trade_offs": rec.brief.trade_offs,
+                "assumptions": rec.brief.assumptions,
+                "evidence_coverage": rec.brief.evidence_coverage,
+                "validation_plan": rec.brief.validation_plan,
+                "counter_metrics": rec.brief.counter_metrics,
+                "expected_effect": rec.brief.expected_effect,
+            },
+            "counterevidence": [
+                {"hypothesis": c.hypothesis, "state": c.state.value if hasattr(c.state, "value") else c.state, "detail": c.detail}
+                for c in rec.counterevidence
+            ],
+            "amendments": [
+                {"version": a.version, "author": a.author, "reason": a.reason,
+                 "scope": a.scope, "previous_version": a.previous_version,
+                 "created_at": a.created_at, "changes": a.changes}
+                for a in rec.amendments
+            ],
+            "outcome": {
+                "observed_results": rec.outcome.observed_results,
+                "pinned_definition_version": rec.outcome.pinned_definition_version,
+                "data_revision": rec.outcome.data_revision,
+                "measurement_window": rec.outcome.measurement_window,
+                "expectation": rec.outcome.expectation,
+                "estimated_effect": rec.outcome.estimated_effect,
+                "study_run": rec.outcome.study_run,
+                "data_quality_caveats": rec.outcome.data_quality_caveats,
+                "review_verdict": rec.outcome.review_verdict.value if hasattr(rec.outcome.review_verdict, "value") else rec.outcome.review_verdict,
+                "verdict_evidence": rec.outcome.verdict_evidence,
+            } if rec.outcome else None,
+            "created_by": rec.created_by,
+            "created_at": rec.created_at,
+            "updated_at": rec.updated_at,
+            "amendment_count": len(rec.amendments),
+        }
+
+    # ---- simulation (M4.3, spec §17.5) ------------------------------------
+    @app.post("/v1/simulations/run")
+    async def simulation_run(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .simulation import SimulationConfig, SimulationError, run_simulation
+        try:
+            config = SimulationConfig.from_dict(body)
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_simulation_config", "detail": str(e)}))
+        try:
+            result = run_simulation(config)
+        except SimulationError as e:
+            raise HTTPException(422, json.dumps({"code": "simulation_failed", "detail": str(e)}))
+        payload = result.to_dict()
+        evidence_ref = store.save_evidence(tenant, "simulation_run", {
+            "config": config.to_dict(),
+            "summary": {k: payload[k] for k in ("total_completed", "total_censored", "total_arrived",
+                                                "average_wait_time", "max_wait_time", "terminal_backlog",
+                                                "average_backlog", "server_utilization")},
+        })
+        store.audit(tenant, user, "simulation.run", "des", "answered", {"evidence_ref": evidence_ref})
+        return {"status": "answered", **payload, "evidence_ref": evidence_ref}
+
     app.state.store = store
     app.state.objects = objects
     return app
