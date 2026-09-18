@@ -1,0 +1,30 @@
+[project]
+name = "decisionos-analytics"
+version = "0.1.0"
+description = "DecisionOS bounded analytics workers: parsing, profiling, grain proof, plan compilation, metric execution."
+requires-python = ">=3.12"
+dependencies = [
+  "polars>=1.16",
+  "pydantic>=2.9",
+  "fastapi>=0.115",
+  "uvicorn>=0.32",
+  "statsforecast>=2.1",
+  "tqdm>=4.66",
+  "pytz>=2024.1",
+  "python-dateutil>=2.9",
+  "scipy>=1.14",
+  "scikit-learn>=1.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "httpx>=0.28"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["decisionos_analytics*"]

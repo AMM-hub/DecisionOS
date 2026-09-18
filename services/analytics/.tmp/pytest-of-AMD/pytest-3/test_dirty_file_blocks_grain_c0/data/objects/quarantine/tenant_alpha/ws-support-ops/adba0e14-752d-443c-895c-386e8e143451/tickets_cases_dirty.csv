@@ -1,0 +1,8 @@
+case_id,subject,priority,channel,originating_branch,status,created_at,first_response_at,resolved_at,reopen_count,document_wait_seconds,customer_id
+00123,Leading zero id must survive,normal,email,MAN-01,open,2026-02-01T10:00:00Z,,,0,0,0000456
+T00012,Ambiguous date,normal,email,MAN-01,open,03/04/2026,,,0,0,C00012
+T00012,Duplicate case_id -> grain violation,high,web,RIF-01,open,2026-02-02T10:00:00Z,,,0,0,C00013
+,Null candidate key component,low,web,MAN-02,open,2026-02-03T10:00:00Z,,,0,0,C00014
+T00015,Formula injection,low,email,MAN-01,open,2026-02-04T10:00:00Z,,,0,0,=1+1
+T00016,Row with wrong column count is rejected,low,email,MAN-01,open
+999999999999999999999,Long numeric-looking id preserved as text,low,phone,SHB-01,open,2026-02-05T10:00:00Z,,,0,0,C00016

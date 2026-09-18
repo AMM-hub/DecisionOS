@@ -1,0 +1,296 @@
+openapi: 3.1.0
+info:
+  title: DecisionOS Application API
+  version: "1.0.0-draft"
+  description: >
+    /v1 stable API skeleton for the E2E flow: authorized upload -> safe parse ->
+    confirmed grain -> approved metric. Conventions per spec §23: opaque cursor
+    lists, Idempotency-Key on mutations, 202 + durable job link for async work,
+    error semantics §23.4. Browser sessions use HttpOnly cookies + CSRF; machine
+    clients use scoped expiring tokens.
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+  - bearerToken: []
+paths:
+  /uploads:
+    post:
+      operationId: initiateUpload
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, size_bytes, workspace_id]
+              properties:
+                filename: { type: string, maxLength: 255 }
+                size_bytes: { type: integer, minimum: 1 }
+                workspace_id: { type: string }
+      responses:
+        "201":
+          description: Upload accepted; target is quarantine, not a public path.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id: { type: string }
+                  method: { type: string, const: PUT }
+                  target_path: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  status: { type: string, const: initiated }
+        "422": { $ref: "#/components/responses/DomainViolation" }
+  /uploads/{uploadId}/content:
+    put:
+      operationId: putUploadContent
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200": { description: Bytes durably accepted into quarantine. }
+  /uploads/{uploadId}/finalize:
+    post:
+      operationId: finalizeUpload
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+      responses:
+        "202":
+          description: Scan + bounded parse enqueued; acknowledge does not imply completion.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: quarantined }
+                  job_id: { type: string }
+                  job_url: { type: string }
+  /uploads/{uploadId}/preview:
+    get:
+      operationId: uploadPreview
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Detected sheets/header/delimiter/encoding/types/issues + rejected rows.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ParsePreview" }
+        "409": { description: Preview not ready. }
+  /datasets:
+    get:
+      operationId: listDatasets
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: Opaque-cursor page of datasets. }
+  /datasets/{datasetId}/grain-candidates:
+    get:
+      operationId: grainCandidates
+      parameters:
+        - { name: datasetId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Candidates proven over the complete committed dataset (§9.2).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GrainCandidate" }
+  /datasets/{datasetId}/grain-confirmation:
+    post:
+      operationId: confirmGrain
+      parameters:
+        - { name: datasetId, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key_columns]
+              properties:
+                key_columns:
+                  type: array
+                  minItems: 1
+                  items: { type: string }
+      responses:
+        "200": { description: Grain business meaning confirmed by an authorized human. }
+        "422": { description: grain_not_proven — uniqueness/null evidence contradicts the key. }
+  /datasets/{datasetId}/revisions/{revision}/publish:
+    post:
+      operationId: publishRevision
+      parameters:
+        - { name: datasetId, in: path, required: true, schema: { type: string } }
+        - { name: revision, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Manifest pointer + checkpoint committed atomically. }
+        "409": { description: concurrent_publish_conflict or revision not publishable. }
+        "422": { description: grain_unconfirmed. }
+  /metrics/definitions:
+    get:
+      operationId: listDefinitions
+      responses: { "200": { description: Definition versions with publication state. } }
+    post:
+      operationId: proposeDefinition
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MetricDefinitionContent" }
+      responses:
+        "201": { description: New immutable definition_version in proposed state. }
+  /metrics/definitions/{metricId}/approve:
+    post:
+      operationId: approveDefinition
+      parameters:
+        - { name: metricId, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, change_reason]
+              properties:
+                version: { type: integer }
+                semantic_release_id: { type: string }
+                change_reason: { type: string }
+                if_match: { type: integer, description: optimistic concurrency }
+      responses:
+        "200": { description: Approved; nonoverlapping publication committed. }
+        "403": { description: self_approval_not_allowed / approval_not_allowed. }
+        "409": { description: version/state conflict. }
+  /metrics/query:
+    post:
+      operationId: queryMetric
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MetricQuery" }
+      responses:
+        "200":
+          description: Answer envelope or insufficient_data response; uncertified metrics refuse.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MetricQueryResult" }
+components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: decisionos_session }
+    bearerToken: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+      description: Scoped to tenant+principal+endpoint+request digest; reuse with changed payload returns 409.
+  responses:
+    DomainViolation:
+      description: Structurally valid request violating a domain input rule.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              code: { type: string, description: stable machine code; no paths/secrets/foreign names }
+  schemas:
+    Predicate:
+      type: object
+      required: [op, field]
+      properties:
+        op: { type: string, enum: [is_not_null, is_null, eq, not_in, in, lt, gte] }
+        field: { type: string }
+        value: {}
+    MetricDefinitionContent:
+      type: object
+      required: [metric_id, name, kind, expression, eligibility, time_basis, timezone, dataset_id]
+      properties:
+        metric_id: { type: string, description: stable identity }
+        name: { type: string }
+        kind: { type: string, enum: [ratio, count, sum, duration_percentile] }
+        expression: { type: object }
+        eligibility: { type: array, items: { $ref: "#/components/schemas/Predicate" } }
+        time_basis: { type: string }
+        timezone: { type: string }
+        dataset_id: { type: string }
+    MetricQuery:
+      type: object
+      required: [schema_version, metric_id, window]
+      properties:
+        schema_version: { type: string, const: "1.0" }
+        metric_id: { type: string }
+        semantic_release_id: { type: string }
+        dimensions: { type: array, items: { type: string } }
+        filters: { type: array, items: { $ref: "#/components/schemas/Predicate" } }
+        window:
+          type: object
+          required: [start, end, timezone]
+          properties:
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time, description: half-open [start,end) }
+            timezone: { type: string }
+        limit: { type: integer, maximum: 10000 }
+    MetricQueryResult:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id: { type: string }
+        status: { type: string, enum: [answered, insufficient_data] }
+        reason_code: { type: string }
+        metric_id: { type: string }
+        definition_version: { type: integer }
+        semantic_release_id: { type: string }
+        rows: { type: array, items: { type: object } }
+        quality_flags: { type: array, items: { type: string } }
+        evidence_ref: { type: string }
+        permissions_checked_at: { type: string, format: date-time }
+    ParsePreview:
+      type: object
+      properties:
+        upload_id: { type: string }
+        detected:
+          type: object
+          properties:
+            delimiter: { type: string }
+            encoding: { type: string }
+            header_row: { type: integer }
+            dialect_confidence: { type: string, enum: [high, needs_confirmation] }
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              inferred_type: { type: string }
+              null_rate: { type: number }
+              sample: { type: array, items: { type: string } }
+        row_count: { type: integer }
+        rejected_rows:
+          type: array
+          items:
+            type: object
+            properties:
+              line: { type: integer }
+              reason: { type: string }
+        issues: { type: array, items: { type: string } }
+    GrainCandidate:
+      type: object
+      properties:
+        key_columns: { type: array, items: { type: string } }
+        unique_over_full_data: { type: boolean }
+        null_components: { type: integer }
+        duplicate_examples: { type: array, items: { type: object } }
+        business_meaning: { type: string, enum: [unconfirmed, confirmed] }

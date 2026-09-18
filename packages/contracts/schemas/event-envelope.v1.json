@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://decisionos.example/schemas/event-envelope/1.0",
+  "title": "DecisionOS Event Envelope (spec 23.6)",
+  "type": "object",
+  "required": ["event_id", "event_type", "schema_version", "tenant_id", "aggregate_id", "aggregate_version", "occurred_at", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "description": "consumers deduplicate on this" },
+    "event_type": { "type": "string", "pattern": "^[a-z]+\\.[a-z_.]+$", "examples": ["dataset.revision_published", "definition.approved", "job.succeeded"] },
+    "schema_version": { "type": "string", "const": "1.0" },
+    "tenant_id": { "type": "string" },
+    "aggregate_id": { "type": "string" },
+    "aggregate_version": { "type": "integer", "minimum": 0 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "trace_id": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "description": "References and minimal metadata only; never raw PII or credentials. Consumers validate tenant binding."
+    }
+  }
+}

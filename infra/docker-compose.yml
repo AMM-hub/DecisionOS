@@ -1,0 +1,71 @@
+name: decisionos
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: decisionos
+      POSTGRES_USER: decisionos_app
+      POSTGRES_PASSWORD: decisionos_dev_only
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U decisionos_app -d decisionos"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: decisionos
+      MINIO_ROOT_PASSWORD: decisionos_dev_only
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+
+  api:
+    image: composer:2
+    working_dir: /app
+    volumes: ["../apps/api:/app"]
+    command: >
+      sh -c "composer install --no-interaction
+      && php -S 0.0.0.0:8000 -t public public/index.php"
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_DATABASE: decisionos
+      DB_USERNAME: decisionos_app
+      DB_PASSWORD: decisionos_dev_only
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      ANALYTICS_WORKER_URL: http://worker:8100
+      ANALYTICS_WORKER_TOKEN: dev-worker-token
+      DECISIONOS_TRUST_DEMO_HEADERS: "true"
+    ports: ["8000:8000"]
+    depends_on: [postgres, minio]
+
+  worker:
+    build:
+      context: ../services/analytics
+      dockerfile: Dockerfile
+    command: uvicorn decisionos_analytics.serve:app --host 0.0.0.0 --port 8100
+    environment:
+      DECISIONOS_DATA_DIR: /var/lib/decisionos
+    volumes: ["dosworker:/var/lib/decisionos"]
+    ports: ["8100:8100"]
+
+  web:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+    environment:
+      NUXT_PUBLIC_API_BASE: http://localhost:8000/api/v1
+    ports: ["3000:3000"]
+
+volumes:
+  pgdata:
+  miniodata:
+  dosworker:

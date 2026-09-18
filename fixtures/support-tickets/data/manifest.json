@@ -1,0 +1,67 @@
+{
+  "generated_with_seed": 20260915,
+  "note": "Synthetic data only. Golden values computed independently of the analytics pipeline.",
+  "tenants": {
+    "tenant_alpha": {
+      "org": "Northline Telecom (synthetic)",
+      "window": {
+        "start": "2026-01-01T00:00:00Z",
+        "end": "2026-04-01T00:00:00Z",
+        "timezone": "UTC"
+      },
+      "rows_total": 420,
+      "per_branch": {
+        "MAN-01": {
+          "eligible": 178,
+          "responded": 166,
+          "median_first_response_hours": 3.5346
+        },
+        "MAN-02": {
+          "eligible": 124,
+          "responded": 112,
+          "median_first_response_hours": 5.8398
+        },
+        "RIF-01": {
+          "eligible": 76,
+          "responded": 53,
+          "median_first_response_hours": 12.6444,
+          "note": "intentionally lower response rate for branch-comparison demo (§33.2)"
+        },
+        "SHB-01": {
+          "eligible": 34,
+          "responded": 29,
+          "median_first_response_hours": 8.0864
+        }
+      },
+      "overall": {
+        "eligible": 412,
+        "responded": 360
+      }
+    },
+    "tenant_beta": {
+      "org": "Harbor Retail Bank (synthetic)",
+      "window": {
+        "start": "2026-01-01T00:00:00Z",
+        "end": "2026-04-01T00:00:00Z",
+        "timezone": "UTC"
+      },
+      "rows_total": 130,
+      "per_branch": {
+        "CCU-01": {
+          "eligible": 86,
+          "responded": 68,
+          "median_first_response_hours": 4.8205
+        },
+        "CCU-02": {
+          "eligible": 40,
+          "responded": 30,
+          "median_first_response_hours": 7.4219
+        }
+      },
+      "overall": {
+        "eligible": 126,
+        "responded": 98
+      }
+    }
+  }
+}

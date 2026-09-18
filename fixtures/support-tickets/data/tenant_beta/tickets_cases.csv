@@ -1,0 +1,131 @@
+﻿case_id,subject,priority,channel,originating_branch,status,created_at,first_response_at,resolved_at,reopen_count,document_wait_seconds,customer_id
+T00001,Roaming charges question,normal,secure_message,CCU-01,resolved,2026-02-18T09:41:30Z,2026-02-18T16:31:24.120000Z,2026-02-19T09:52:42.663402Z,2,0,C00109
+T00002,Billing dispute on monthly invoice,normal,email,CCU-01,open,2026-03-27T23:37:32Z,2026-03-28T03:44:21.320000Z,,0,0,C00108
+T00003,طلب تغيير باقة البيانات,normal,email,CCU-01,open,2026-03-25T00:12:19Z,2026-03-25T02:49:32.800000Z,,0,4228,C00014
+T00004,Plan upgrade inquiry,high,email,CCU-02,resolved,2026-03-12T17:39:12Z,2026-03-13T11:36:15.240000Z,2026-03-14T12:28:18.061983Z,0,0,C00070
+T00005,Plan upgrade inquiry,high,email,CCU-02,resolved,2026-02-18T08:05:36Z,2026-02-18T12:34:31.920000Z,2026-02-20T09:27:03.225523Z,0,0,C00021
+T00006,Internet outage in area,high,phone,CCU-01,open,2026-02-09T16:07:33Z,2026-02-10T04:46:36.600000Z,,0,47599,C00075
+T00007,SIM card replacement request,high,secure_message,CCU-01,closed,2026-03-30T15:05:00Z,,,0,0,C00069
+T00008,Router configuration help,high,secure_message,CCU-02,cancelled,2026-03-15T13:17:46Z,2026-03-16T11:32:10Z,,2,76725,C00087
+T00009,طلب تغيير باقة البيانات,normal,email,CCU-01,open,2026-01-13T11:05:18Z,2026-01-13T22:07:30.120000Z,,2,0,C00052
+T00010,SIM card replacement request,high,phone,CCU-02,open,2026-01-09T21:36:28Z,,,0,0,C00112
+T00011,Plan upgrade inquiry,high,phone,CCU-01,resolved,2026-01-21T11:01:49Z,2026-01-21T23:35:13.480000Z,2026-01-23T03:51:04.346807Z,1,0,C00090
+T00012,Plan upgrade inquiry,normal,phone,CCU-01,resolved,2026-03-25T03:21:43Z,2026-03-25T09:08:25.600000Z,2026-03-26T02:39:44.597053Z,0,0,C00041
+T00013,Router configuration help,high,phone,CCU-01,resolved,2026-01-13T21:38:17Z,,,0,0,C00095
+T00014,Plan upgrade inquiry,normal,secure_message,CCU-01,closed,2026-03-21T09:21:53Z,2026-03-21T14:42:33.560000Z,2026-03-22T16:48:55.397907Z,0,0,C00049
+T00015,Roaming charges question,high,email,CCU-02,cancelled,2026-01-17T15:38:03Z,2026-01-18T04:35:06.600000Z,,0,0,C00126
+T00016,Roaming charges question,normal,phone,CCU-01,resolved,2026-03-12T17:45:14Z,2026-03-12T21:51:34.520000Z,2026-03-13T16:54:05.625628Z,1,0,C00073
+T00017,Router configuration help,high,email,CCU-01,open,2026-02-27T23:18:19Z,2026-02-28T07:02:18.520000Z,,0,29853,C00047
+T00018,مشكلة في فاتورة الاشتراك الشهري,normal,phone,CCU-01,open,2026-02-07T01:14:33Z,2026-02-08T01:41:53.160000Z,,1,0,C00050
+T00019,Plan upgrade inquiry,high,secure_message,CCU-02,spam,2026-03-18T07:54:13Z,,,1,0,C00009
+T00020,انقطاع خدمة الإنترنت في المنطقه,normal,email,CCU-02,resolved,2026-01-17T05:47:03Z,2026-01-17T10:21:25.080000Z,2026-01-18T20:04:48.526970Z,0,67718,C00073
+T00021,Roaming charges question,normal,secure_message,CCU-02,resolved,2026-03-11T21:44:18Z,2026-03-12T07:20:16.920000Z,2026-03-13T03:12:14.727457Z,2,64463,C00045
+T00022,Plan upgrade inquiry,high,phone,CCU-01,resolved,2026-02-05T03:12:35Z,2026-02-05T11:29:08.600000Z,2026-02-05T14:17:05.225532Z,2,0,C00116
+T00023,استفسار عن رسوم التجوال الدولي,normal,secure_message,CCU-02,closed,2026-02-09T20:01:09Z,,,0,10974,C00010
+T00024,Router configuration help,normal,secure_message,CCU-01,resolved,2026-01-16T11:13:51Z,2026-01-16T15:49:15.360000Z,2026-01-17T07:12:33.856948Z,2,16617,C00054
+T00025,Plan upgrade inquiry,high,email,CCU-01,resolved,2026-02-22T07:43:48Z,,,1,48983,C00050
+T00026,Roaming charges question,high,secure_message,CCU-01,resolved,2026-01-06T02:53:56Z,2026-01-06T07:42:35.240000Z,2026-01-08T05:01:40.414348Z,0,0,C00066
+T00027,Roaming charges question,normal,secure_message,CCU-02,resolved,2026-03-27T04:46:51Z,2026-03-27T09:06:00.120000Z,2026-03-28T12:55:53.395247Z,0,23267,C00099
+T00028,Router configuration help,normal,phone,CCU-01,resolved,2026-02-26T12:51:15Z,2026-02-26T15:39:41.280000Z,2026-02-27T06:00:48.290374Z,1,0,C00125
+T00029,Internet outage in area,high,email,CCU-01,resolved,2026-01-06T18:57:32Z,2026-01-07T04:59:41.960000Z,2026-01-07T12:59:38.079340Z,0,0,C00002
+T00030,Roaming charges question,normal,email,CCU-02,closed,2026-03-07T05:30:48Z,2026-03-07T12:56:23.400000Z,2026-03-08T15:59:07.086518Z,0,29774,C00007
+T00031,طلب تغيير باقة البيانات,normal,phone,CCU-01,resolved,2026-03-28T08:05:44Z,2026-03-29T04:56:15.200000Z,2026-03-29T15:16:43.951162Z,1,7573,C00004
+T00032,Internet outage in area,normal,phone,CCU-01,resolved,2026-02-07T23:25:59Z,,,0,0,C00036
+T00033,Roaming charges question,normal,secure_message,CCU-02,open,2026-03-06T14:43:20Z,,,2,46043,C00006
+T00034,SIM card replacement request,high,secure_message,CCU-01,closed,2026-01-05T02:02:19Z,2026-01-05T09:56:24.040000Z,2026-01-06T21:30:17.110185Z,2,78543,C00060
+T00035,SIM card replacement request,high,secure_message,CCU-01,resolved,2026-02-19T12:19:57Z,2026-02-19T16:37:10.920000Z,2026-02-21T01:11:38.030200Z,0,0,C00070
+T00036,Plan upgrade inquiry,high,email,CCU-01,closed,2026-03-19T09:03:37Z,2026-03-19T16:36:12.880000Z,2026-03-21T12:43:11.350595Z,2,0,C00023
+T00037,طلب تغيير باقة البيانات,normal,secure_message,CCU-01,resolved,2026-03-13T09:57:32Z,,,0,0,C00075
+T00038,Internet outage in area,normal,phone,CCU-01,resolved,2026-01-02T13:45:19Z,2026-01-02T16:52:38.560000Z,2026-01-04T15:41:53.615746Z,0,0,C00011
+T00039,Billing dispute on monthly invoice,high,secure_message,CCU-02,resolved,2026-02-04T18:44:07Z,2026-02-06T03:59:02.320000Z,2026-02-07T19:08:29.795235Z,0,0,C00065
+T00040,Router configuration help,high,secure_message,CCU-01,resolved,2026-01-13T18:55:34Z,2026-01-14T01:29:33.400000Z,2026-01-15T05:36:06.135160Z,0,0,C00072
+T00041,Roaming charges question,normal,email,CCU-01,resolved,2026-03-02T15:13:16Z,2026-03-02T19:18:32.080000Z,2026-03-04T19:03:47.373928Z,2,36112,C00123
+T00042,انقطاع خدمة الإنترنت في المنطقه,normal,phone,CCU-01,closed,2026-01-16T01:00:03Z,,,1,0,C00013
+T00043,طلب تغيير باقة البيانات,normal,secure_message,CCU-02,cancelled,2026-02-07T17:14:06Z,2026-02-07T23:00:48.600000Z,,0,0,C00090
+T00044,Plan upgrade inquiry,normal,secure_message,CCU-02,resolved,2026-03-14T10:33:30Z,,,2,0,C00039
+T00045,Plan upgrade inquiry,normal,secure_message,CCU-01,resolved,2026-02-04T05:28:25Z,2026-02-04T10:03:33.160000Z,2026-02-06T07:45:56.174841Z,0,0,C00052
+T00046,طلب تغيير باقة البيانات,high,email,CCU-02,resolved,2026-02-24T23:40:08Z,2026-02-25T07:47:16.400000Z,2026-02-25T10:18:35.990839Z,0,0,C00042
+T00047,Billing dispute on monthly invoice,normal,secure_message,CCU-01,cancelled,2026-03-28T13:48:10Z,2026-03-28T20:26:36.160000Z,,2,0,C00123
+T00048,SIM card replacement request,normal,email,CCU-02,resolved,2026-01-02T19:46:26Z,2026-01-03T08:29:31.880000Z,2026-01-04T16:47:46.849313Z,0,0,C00018
+T00049,Internet outage in area,high,email,CCU-02,open,2026-03-15T07:54:21Z,2026-03-15T16:19:25.440000Z,,1,0,C00097
+T00050,Plan upgrade inquiry,normal,email,CCU-01,resolved,2026-02-07T17:21:32Z,2026-02-07T19:48:39.200000Z,2026-02-08T23:40:35.492513Z,0,53868,C00108
+T00051,طلب تغيير باقة البيانات,high,secure_message,CCU-01,closed,2026-03-24T13:26:29Z,,,1,0,C00110
+T00052,Router configuration help,high,email,CCU-02,resolved,2026-01-18T15:19:39Z,2026-01-18T20:38:46.680000Z,2026-01-19T02:41:12.083989Z,0,60339,C00113
+T00053,Router configuration help,high,phone,CCU-01,cancelled,2026-01-27T01:21:46Z,2026-01-27T06:56:31.480000Z,,1,0,C00017
+T00054,استفسار عن رسوم التجوال الدولي,high,phone,CCU-01,resolved,2026-03-28T20:08:43Z,2026-03-28T22:51:12.880000Z,2026-03-29T17:23:41.683915Z,0,0,C00041
+T00055,Plan upgrade inquiry,normal,email,CCU-02,resolved,2026-01-01T05:44:03Z,,,2,0,C00102
+T00056,SIM card replacement request,normal,phone,CCU-02,resolved,2026-02-11T23:15:24Z,,,1,11014,C00052
+T00057,مشكلة في فاتورة الاشتراك الشهري,high,email,CCU-01,resolved,2026-03-15T23:40:08Z,2026-03-16T05:30:05.720000Z,2026-03-16T08:44:36.076595Z,2,46244,C00057
+T00058,استفسار عن رسوم التجوال الدولي,normal,email,CCU-01,open,2026-01-09T17:25:13Z,,,0,88118,C00116
+T00059,Plan upgrade inquiry,high,email,CCU-02,resolved,2026-01-08T04:13:24Z,,,0,72747,C00039
+T00060,انقطاع خدمة الإنترنت في المنطقه,normal,phone,CCU-01,resolved,2026-03-08T01:20:22Z,2026-03-08T04:21:19.960000Z,2026-03-09T00:09:40.427227Z,1,7532,C00077
+T00061,SIM card replacement request,normal,email,CCU-02,open,2026-03-01T18:54:42Z,2026-03-02T02:19:43.920000Z,,2,0,C00127
+T00062,Router configuration help,high,secure_message,CCU-01,closed,2026-02-07T05:29:34Z,2026-02-07T13:25:21.640000Z,2026-02-08T23:13:58.100232Z,1,0,C00042
+T00063,Internet outage in area,normal,secure_message,CCU-02,spam,2026-01-07T00:04:13Z,,,0,0,C00017
+T00064,Roaming charges question,high,email,CCU-01,resolved,2026-03-21T03:40:39Z,2026-03-21T08:30:27Z,2026-03-23T00:37:06.096216Z,0,6058,C00126
+T00065,Internet outage in area,normal,email,CCU-01,open,2026-03-22T20:25:12Z,2026-03-22T22:38:00.960000Z,,0,27387,C00064
+T00066,طلب تغيير باقة البيانات,normal,secure_message,CCU-01,open,2026-01-16T11:05:48Z,2026-01-16T12:58:16.920000Z,,2,0,C00049
+T00067,SIM card replacement request,normal,email,CCU-02,open,2026-02-28T10:22:00Z,2026-02-28T14:54:20.040000Z,,0,0,C00037
+T00068,SIM card replacement request,high,email,CCU-02,spam,2026-02-11T08:13:24Z,,,0,0,C00010
+T00069,Internet outage in area,high,email,CCU-01,resolved,2026-01-10T12:53:40Z,,,1,0,C00027
+T00070,استفسار عن رسوم التجوال الدولي,high,secure_message,CCU-01,closed,2026-02-13T18:42:42Z,,,0,0,C00126
+T00071,Billing dispute on monthly invoice,high,email,CCU-02,resolved,2026-01-13T04:49:59Z,2026-01-13T14:55:56.120000Z,2026-01-14T11:53:36.051316Z,1,0,C00004
+T00072,Billing dispute on monthly invoice,normal,secure_message,CCU-01,closed,2026-01-16T22:23:11Z,2026-01-17T01:24:04.280000Z,2026-01-17T12:50:31.153748Z,0,0,C00077
+T00073,مشكلة في فاتورة الاشتراك الشهري,high,email,CCU-02,open,2026-02-09T14:32:41Z,2026-02-09T19:51:03.320000Z,,0,0,C00084
+T00074,Router configuration help,high,email,CCU-01,open,2026-01-28T13:39:24Z,,,0,0,C00023
+T00075,Billing dispute on monthly invoice,high,secure_message,CCU-02,cancelled,2026-01-04T14:13:25Z,,,0,0,C00099
+T00076,استفسار عن رسوم التجوال الدولي,high,secure_message,CCU-02,cancelled,2026-03-09T06:13:50Z,2026-03-09T09:09:37.280000Z,,0,28557,C00117
+T00077,Router configuration help,normal,secure_message,CCU-01,resolved,2026-01-14T17:01:19Z,2026-01-14T21:16:54.640000Z,2026-01-16T19:11:31.893902Z,1,0,C00079
+T00078,Billing dispute on monthly invoice,normal,phone,CCU-01,resolved,2026-03-16T02:40:18Z,2026-03-16T10:44:04.440000Z,2026-03-17T02:50:42.076768Z,2,0,C00028
+T00079,Internet outage in area,normal,email,CCU-01,closed,2026-02-15T01:11:23Z,2026-02-15T05:53:35.960000Z,2026-02-16T10:40:38.695308Z,0,19998,C00011
+T00080,Billing dispute on monthly invoice,high,email,CCU-02,closed,2026-03-23T23:45:28Z,,,2,0,C00081
+T00081,SIM card replacement request,normal,phone,CCU-02,resolved,2026-03-09T13:22:02Z,2026-03-10T00:04:24.320000Z,2026-03-10T22:28:43.204535Z,0,0,C00056
+T00082,Roaming charges question,normal,secure_message,CCU-01,resolved,2026-02-23T11:29:44Z,2026-02-23T16:49:46.040000Z,2026-02-25T14:25:49.039145Z,0,0,C00118
+T00083,Roaming charges question,high,phone,CCU-01,open,2026-01-05T02:16:33Z,,,0,85739,C00116
+T00084,Plan upgrade inquiry,normal,phone,CCU-01,resolved,2026-03-01T04:52:21Z,2026-03-01T09:21:15.120000Z,2026-03-03T05:19:18.154656Z,2,0,C00107
+T00085,طلب تغيير باقة البيانات,normal,secure_message,CCU-02,resolved,2026-02-27T14:31:49Z,2026-02-27T20:39:35.200000Z,2026-02-28T17:37:10.960771Z,0,0,C00071
+T00086,انقطاع خدمة الإنترنت في المنطقه,normal,secure_message,CCU-01,resolved,2026-03-12T10:41:41Z,2026-03-12T18:34:56Z,2026-03-14T14:40:44.318283Z,0,0,C00032
+T00087,Internet outage in area,high,secure_message,CCU-01,resolved,2026-03-06T18:11:37Z,2026-03-06T21:24:31Z,2026-03-08T16:11:12.384249Z,0,0,C00063
+T00088,SIM card replacement request,high,phone,CCU-01,resolved,2026-01-15T02:41:50Z,2026-01-15T05:01:23.960000Z,2026-01-17T04:14:05.642569Z,0,74341,C00117
+T00089,Router configuration help,normal,phone,CCU-01,resolved,2026-01-08T03:53:41Z,2026-01-08T05:06:27.080000Z,2026-01-08T06:34:53.105920Z,1,0,C00054
+T00090,استفسار عن رسوم التجوال الدولي,normal,email,CCU-01,closed,2026-01-19T19:12:03Z,2026-01-19T23:51:25.680000Z,2026-01-21T18:51:07.288392Z,0,0,C00051
+T00091,Plan upgrade inquiry,normal,email,CCU-02,closed,2026-03-19T15:53:28Z,2026-03-20T03:46:28.240000Z,2026-03-21T10:42:52.318319Z,0,0,C00017
+T00092,Router configuration help,high,secure_message,CCU-01,closed,2026-01-02T04:50:52Z,,,2,0,C00085
+T00093,Router configuration help,normal,email,CCU-01,resolved,2026-03-28T00:13:40Z,2026-03-28T08:59:59.200000Z,2026-03-29T02:21:52.026752Z,2,0,C00049
+T00094,SIM card replacement request,normal,phone,CCU-01,cancelled,2026-02-21T07:08:57Z,,,1,0,C00056
+T00095,Roaming charges question,normal,email,CCU-02,resolved,2026-02-12T04:29:11Z,2026-02-12T11:10:30.320000Z,2026-02-13T18:56:25.153380Z,0,32032,C00011
+T00096,Internet outage in area,normal,secure_message,CCU-02,closed,2026-01-03T23:44:20Z,2026-01-04T07:04:20.600000Z,2026-01-05T13:09:28.868351Z,0,24280,C00019
+T00097,Billing dispute on monthly invoice,normal,phone,CCU-01,cancelled,2026-02-11T15:49:55Z,2026-02-11T20:32:39.280000Z,,0,0,C00065
+T00098,Router configuration help,high,email,CCU-01,resolved,2026-02-01T04:02:40Z,2026-02-01T05:17:14.080000Z,2026-02-02T23:09:24.103300Z,0,0,C00001
+T00099,طلب تغيير باقة البيانات,high,secure_message,CCU-01,closed,2026-01-09T08:38:51Z,2026-01-09T16:47:02.400000Z,2026-01-11T12:29:11.758041Z,2,0,C00028
+T00100,Roaming charges question,normal,phone,CCU-02,resolved,2026-01-09T23:12:01Z,2026-01-10T04:27:48.160000Z,2026-01-10T06:26:52.690003Z,0,14260,C00097
+T00101,Internet outage in area,normal,phone,CCU-01,resolved,2026-01-30T19:37:10Z,,,2,0,C00106
+T00102,Roaming charges question,high,phone,CCU-02,closed,2026-03-01T22:48:41Z,2026-03-02T08:44:34.400000Z,2026-03-02T22:00:03.101837Z,1,0,C00099
+T00103,Roaming charges question,high,email,CCU-01,resolved,2026-03-18T06:30:59Z,2026-03-18T13:46:27.080000Z,2026-03-20T07:02:54.248158Z,0,0,C00018
+T00104,طلب تغيير باقة البيانات,normal,email,CCU-02,closed,2026-02-07T23:41:58Z,2026-02-09T00:11:41.080000Z,2026-02-09T01:33:08.363519Z,2,40884,C00127
+T00105,Internet outage in area,high,secure_message,CCU-01,resolved,2026-01-22T20:23:17Z,2026-01-23T00:31:07.520000Z,2026-01-24T16:09:22.527621Z,0,0,C00119
+T00106,Billing dispute on monthly invoice,high,phone,CCU-01,resolved,2026-03-12T19:15:25Z,2026-03-12T22:24:26.080000Z,2026-03-14T14:06:24.071776Z,0,0,C00024
+T00107,Internet outage in area,normal,phone,CCU-01,resolved,2026-01-08T02:25:33Z,,,0,0,C00087
+T00108,انقطاع خدمة الإنترنت في المنطقه,normal,secure_message,CCU-01,closed,2026-02-01T19:57:02Z,2026-02-02T02:36:31.880000Z,2026-02-02T23:06:17.086261Z,2,0,C00038
+T00109,SIM card replacement request,high,phone,CCU-02,closed,2026-01-01T05:38:08Z,2026-01-01T11:39:32.600000Z,2026-01-03T02:05:45.494504Z,2,0,C00123
+T00110,SIM card replacement request,high,email,CCU-01,resolved,2026-01-02T17:33:02Z,2026-01-03T03:36:42.320000Z,2026-01-04T03:51:44.900431Z,0,34267,C00024
+T00111,طلب تغيير باقة البيانات,high,phone,CCU-01,resolved,2026-03-16T09:17:32Z,2026-03-16T12:43:03.440000Z,2026-03-17T20:59:05.830014Z,0,0,C00019
+T00112,Roaming charges question,normal,secure_message,CCU-01,closed,2026-02-18T12:33:14Z,2026-02-18T21:20:39.080000Z,2026-02-19T04:35:39.861232Z,0,0,C00079
+T00113,مشكلة في فاتورة الاشتراك الشهري,high,secure_message,CCU-01,resolved,2026-03-02T01:16:26Z,2026-03-02T06:27:02.120000Z,2026-03-04T02:12:02.456528Z,0,0,C00124
+T00114,Billing dispute on monthly invoice,high,secure_message,CCU-01,resolved,2026-01-26T06:39:38Z,2026-01-26T13:15:36.200000Z,2026-01-27T23:36:46.280994Z,2,0,C00043
+T00115,SIM card replacement request,normal,secure_message,CCU-01,resolved,2026-01-21T17:09:41Z,2026-01-21T20:51:15.440000Z,2026-01-22T04:14:19.330752Z,2,0,C00102
+T00116,انقطاع خدمة الإنترنت في المنطقه,high,phone,CCU-01,open,2026-01-19T21:13:31Z,2026-01-20T00:41:16Z,,0,0,C00116
+T00117,Plan upgrade inquiry,normal,email,CCU-01,resolved,2026-01-04T22:06:29Z,2026-01-05T08:31:43.880000Z,2026-01-06T04:05:37.203665Z,0,27506,C00127
+T00118,مشكلة في فاتورة الاشتراك الشهري,high,secure_message,CCU-01,resolved,2026-01-27T20:29:28Z,2026-01-28T07:44:23.320000Z,2026-01-28T18:40:32.204971Z,0,54443,C00102
+T00119,Roaming charges question,high,email,CCU-01,closed,2026-02-07T10:22:29Z,,,0,0,C00006
+T00120,Roaming charges question,high,email,CCU-01,spam,2026-02-05T15:05:05Z,,,1,60028,C00126
+T00121,Internet outage in area,normal,email,CCU-01,closed,2026-03-06T10:12:23Z,2026-03-06T15:21:17.240000Z,2026-03-07T21:59:45.193556Z,0,61249,C00052
+T00122,Billing dispute on monthly invoice,high,secure_message,CCU-02,resolved,2026-01-22T12:40:07Z,,,0,0,C00088
+T00123,مشكلة في فاتورة الاشتراك الشهري,normal,email,CCU-01,open,2026-03-12T23:48:22Z,2026-03-13T04:54:36.040000Z,,0,43167,C00121
+T00124,انقطاع خدمة الإنترنت في المنطقه,normal,secure_message,CCU-01,resolved,2026-03-07T03:16:16Z,2026-03-07T07:03:08.320000Z,2026-03-08T12:19:16.384347Z,0,0,C00005
+T00125,Plan upgrade inquiry,high,email,CCU-01,resolved,2026-02-18T05:36:29Z,2026-02-18T08:53:19.160000Z,2026-02-19T16:59:57.502529Z,2,0,C00124
+T00126,انقطاع خدمة الإنترنت في المنطقه,high,email,CCU-02,cancelled,2026-01-23T19:48:20Z,2026-01-24T11:35:42.920000Z,,2,0,C00106
+T00127,Plan upgrade inquiry,normal,phone,CCU-01,open,2026-01-02T04:26:50Z,,,1,0,C00122
+T00128,Router configuration help,high,secure_message,CCU-01,resolved,2026-01-11T21:20:57Z,2026-01-12T01:50:39.720000Z,2026-01-13T13:16:30.053849Z,2,0,C00106
+T00129,Internet outage in area,high,phone,CCU-01,resolved,2026-03-11T09:11:40Z,2026-03-11T12:44:17.320000Z,2026-03-13T05:31:58.344293Z,0,89357,C00119
+T00130,SIM card replacement request,high,phone,CCU-02,resolved,2026-03-06T01:18:54Z,2026-03-06T06:06:55.800000Z,2026-03-07T20:16:25.222539Z,1,0,C00014
