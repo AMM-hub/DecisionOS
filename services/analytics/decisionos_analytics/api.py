@@ -634,6 +634,73 @@ def create_app(data_dir: Path) -> FastAPI:
         rows = store.conn.execute("SELECT event_id,event_type,tenant_id,aggregate_id,aggregate_version,occurred_at,payload FROM outbox_event WHERE tenant_id=? ORDER BY occurred_at", (tenant,)).fetchall()
         return [dict(r) for r in rows]
 
+    # ---- scenario & optimisation (M4, spec §17) ---------------------------
+    @app.get("/v1/scenarios/templates")
+    async def scenario_templates():
+        from .optimization import SCENARIO_TEMPLATES
+        return [
+            {"template_id": tid, "name": tpl["name"], "description": tpl["description"],
+             "sections": tpl["sections"]}
+            for tid, tpl in SCENARIO_TEMPLATES.items()
+        ]
+
+    @app.post("/v1/scenarios/solve", status_code=200)
+    async def scenario_solve(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        from .optimization import AllocationInputs, solve_allocation
+
+        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
+            raise HTTPException(401, "demo authentication missing")
+
+        body = await request.json()
+        template = body.get("template", "reallocate-capacity")
+
+        try:
+            inputs = AllocationInputs(
+                groups=body["groups"],
+                queues=body["queues"],
+                periods=body.get("periods", [1]),
+                segments=body.get("segments", [1]),
+                eligibility={tuple(k): v for k, v in body.get("eligibility", {}).items()},
+                regular_hours={tuple(k): v for k, v in body.get("regular_hours", {}).items()},
+                overtime_cap={tuple(k): v for k, v in body.get("overtime_cap", {}).items()},
+                arrivals={tuple(k): v for k, v in body.get("arrivals", {}).items()},
+                opening_backlog=body.get("opening_backlog", {}),
+                segment_width={tuple(k): v for k, v in body.get("segment_width", {}).items()},
+                marginal_rate={tuple(k): v for k, v in body.get("marginal_rate", {}).items()},
+                regular_cost={tuple(k): v for k, v in body.get("regular_cost", {}).items()},
+                overtime_cost={tuple(k): v for k, v in body.get("overtime_cost", {}).items()},
+                backlog_penalty={tuple(k): v for k, v in body.get("backlog_penalty", {}).items()},
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_inputs", "detail": str(e)}))
+
+        try:
+            result = solve_allocation(
+                inputs,
+                backlog_penalty_weight=float(body.get("backlog_penalty_weight", 1.0)),
+                overtime_penalty_weight=float(body.get("overtime_penalty_weight", 1.0)),
+                timelimit=int(body.get("timelimit", 30)),
+                integer=bool(body.get("integer", False)),
+            )
+        except Exception as e:
+            return JSONResponse(status_code=200, content={
+                "status": "failed", "reason": str(e),
+                "template": template,
+            })
+
+        return {
+            "status": result.status,
+            "template": template,
+            "objective": result.objective,
+            "bound": result.bound,
+            "gap": result.gap,
+            "solver": result.solver,
+            "solver_version": result.solver_version,
+            "runtime": result.runtime,
+            "variable_count": len(result.variables),
+            "infeasibility_report": result.infeasibility_report,
+        }
+
     app.state.store = store
     app.state.objects = objects
     return app

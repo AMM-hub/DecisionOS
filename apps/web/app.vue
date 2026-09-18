@@ -7,7 +7,8 @@ const links = [
   { to: '/datasets', label: 'Datasets' },
   { to: '/metrics', label: 'Metrics' },
   { to: '/forecasts', label: 'Forecasts' },
-  { to: '/workflow', label: 'Workflow' }
+  { to: '/workflow', label: 'Workflow' },
+  { to: '/scenarios', label: 'Scenarios' }
 ]
 
 const { user, base } = useApi()
