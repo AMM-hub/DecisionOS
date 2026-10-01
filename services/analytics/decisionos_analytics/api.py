@@ -984,33 +984,33 @@ def create_app(data_dir: Path) -> FastAPI:
             raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
         return {"status": "updated", "episode": ep}
 
-        # ---- bilingual search (M6, spec §27) ---------------------------------
-        @app.get("/v1/bilingual/labels")
-        async def bilingual_labels(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-            tenant, _ = ctx(x_tenant, x_user)
-            from .bilingual import (
-                BILLINGUAL_METRIC_LABELS, BILLINGUAL_DATASET_LABELS,
-                BILLINGUAL_STATUS_LABELS,
-            )
-            return {
-                "metrics": {k: dict(v) for k, v in BILLINGUAL_METRIC_LABELS.items()},
-                "datasets": {k: dict(v) for k, v in BILLINGUAL_DATASET_LABELS.items()},
-                "statuses": {k: dict(v) for k, v in BILLINGUAL_STATUS_LABELS.items()},
-            }
+    # ---- bilingual search (M6, spec §27) ------------
+    @app.get("/v1/bilingual/labels")
+    async def bilingual_labels(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .bilingual import (
+            BILLINGUAL_METRIC_LABELS, BILLINGUAL_DATASET_LABELS,
+            BILLINGUAL_STATUS_LABELS,
+        )
+        return {
+            "metrics": {k: dict(v) for k, v in BILLINGUAL_METRIC_LABELS.items()},
+            "datasets": {k: dict(v) for k, v in BILLINGUAL_DATASET_LABELS.items()},
+            "statuses": {k: dict(v) for k, v in BILLINGUAL_STATUS_LABELS.items()},
+        }
 
-        @app.post("/v1/bilingual/search")
-        async def bilingual_search(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-            tenant, _ = ctx(x_tenant, x_user)
-            body = await request.json()
-            query = body.get("query", "")
-            locale = body.get("locale", "en")
-            from .bilingual import search_match, normalize_search, BILLINGUAL_METRIC_LABELS, get_label
-            results = []
-            for metric_id, labels in BILLINGUAL_METRIC_LABELS.items():
-                aliases = {"en": [labels.get("en", "")], "ar": [labels.get("ar", "")] if "ar" in labels else []}
-                if search_match(query, aliases):
-                    results.append({"id": metric_id, "label": get_label(labels, locale)})
-            return {"query": query, "locale": locale, "query_normalized": normalize_search(query), "results": results}
+    @app.post("/v1/bilingual/search")
+    async def bilingual_search(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        body = await request.json()
+        query = body.get("query", "")
+        locale = body.get("locale", "en")
+        from .bilingual import search_match, normalize_search, BILLINGUAL_METRIC_LABELS, get_label
+        results = []
+        for metric_id, labels in BILLINGUAL_METRIC_LABELS.items():
+            aliases = {"en": [labels.get("en", "")], "ar": [labels.get("ar", "")] if "ar" in labels else []}
+            if search_match(query, aliases):
+                results.append({"id": metric_id, "label": get_label(labels, locale)})
+        return {"query": query, "locale": locale, "query_normalized": normalize_search(query), "results": results}
 
     app.state.store = store
     app.state.objects = objects
