@@ -157,6 +157,69 @@ CREATE TABLE IF NOT EXISTS forecast_model (
   created_at TEXT NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
+
+CREATE TABLE IF NOT EXISTS alert_rule (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  dataset_id TEXT NOT NULL,
+  metric_id TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT 'seasonal_naive',
+  season_length INTEGER NOT NULL DEFAULT 7,
+  threshold REAL NOT NULL DEFAULT 3.0,
+  min_effect_size REAL NOT NULL DEFAULT 0.01,
+  persistence INTEGER NOT NULL DEFAULT 1,
+  owner TEXT NOT NULL,
+  escalation TEXT DEFAULT '',
+  runbook TEXT DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS condition_state (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  condition TEXT NOT NULL DEFAULT 'normal',
+  started_at TEXT,
+  recovered_at TEXT,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS alert_episode (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  episode_identity TEXT NOT NULL,
+  condition_id TEXT NOT NULL,
+  workflow_status TEXT NOT NULL DEFAULT 'open',
+  observed_value REAL,
+  expected_lower REAL,
+  expected_upper REAL,
+  scoring_method TEXT,
+  training_window TEXT,
+  effect_size REAL,
+  persistence_count INTEGER DEFAULT 0,
+  started_at TEXT NOT NULL,
+  resolved_at TEXT,
+  acknowledged_at TEXT,
+  acknowledged_by TEXT,
+  resolution_notes TEXT,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS alert_delivery (
+  tenant_id TEXT NOT NULL,
+  episode_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  suppressed_reason TEXT,
+  retry_count INTEGER DEFAULT 0,
+  last_attempt TEXT,
+  PRIMARY KEY (tenant_id, episode_id)
+);
 """
 
 

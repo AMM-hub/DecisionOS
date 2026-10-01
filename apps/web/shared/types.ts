@@ -546,3 +546,102 @@ export interface ApiErrorBody {
   code?: string
   detail?: unknown
 }
+
+// ---- monitoring (M5, spec §14) --------------------------------------------
+export interface MonitoringHealthDataset {
+  dataset_id: string
+  freshness_hours: number | null
+  revision_count: number
+  latest_revision: number | null
+  last_ingested_at: string | null
+  status: 'healthy' | 'stale' | 'suspended' | 'unknown'
+  revision_history: Array<{ revision: number; created_at: string; object_count: number }>
+}
+
+export interface MonitoringAlertRule {
+  tenant_id: string
+  id: string
+  name: string
+  dataset_id: string
+  metric_id: string
+  method: string
+  season_length: number
+  threshold: number
+  min_effect_size: number
+  persistence: number
+  owner: string
+  escalation: string
+  runbook: string
+  enabled: boolean
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface MonitoringCreateRuleRequest {
+  name: string
+  dataset_id: string
+  metric_id: string
+  method?: string
+  season_length?: number
+  threshold?: number
+  min_effect_size?: number
+  persistence?: number
+  owner?: string
+  escalation?: string
+  runbook?: string
+}
+
+export interface MonitoringRuleListResponse {
+  rules: MonitoringAlertRule[]
+}
+
+export interface MonitoringEvaluateResponse {
+  status: string
+  evaluated: number
+  anomalies_fired: number
+  episodes: Array<{
+    episode_id: string
+    rule_id: string
+    condition_id: string
+    workflow_status: string
+    observed_value: number
+    expected_lower: number
+    expected_upper: number
+    method: string
+  }>
+}
+
+export interface MonitoringConditionState {
+  id: string
+  rule_id: string
+  rule_name: string | null
+  condition: string
+  started_at: string | null
+  recovered_at: string | null
+}
+
+export interface MonitoringAlertEpisode {
+  tenant_id: string
+  id: string
+  rule_id: string
+  episode_identity: string
+  condition_id: string
+  workflow_status: string
+  observed_value: number | null
+  expected_lower: number | null
+  expected_upper: number | null
+  scoring_method: string | null
+  training_window: string | null
+  effect_size: number | null
+  persistence_count: number | null
+  started_at: string
+  resolved_at: string | null
+  acknowledged_at: string | null
+  acknowledged_by: string | null
+  resolution_notes: string | null
+}
+
+export interface MonitoringEpisodeListResponse {
+  episodes: MonitoringAlertEpisode[]
+}

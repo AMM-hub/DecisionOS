@@ -862,6 +862,128 @@ def create_app(data_dir: Path) -> FastAPI:
         store.audit(tenant, user, "simulation.run", "des", "answered", {"evidence_ref": evidence_ref})
         return {"status": "answered", **payload, "evidence_ref": evidence_ref}
 
+    # ---- monitoring (M5, spec §14) -----------------------------------------
+    @app.get("/v1/monitoring/health/{dataset_id}")
+    async def monitoring_health(dataset_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .monitoring import DataHealth
+        return DataHealth.check(tenant, dataset_id, store)
+
+    @app.get("/v1/monitoring/health")
+    async def monitoring_health_all(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .monitoring import DataHealth
+        return DataHealth.check_all(tenant, store)
+
+    @app.post("/v1/monitoring/rules", status_code=201)
+    async def monitoring_create_rule(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .monitoring import AlertLifecycle
+        try:
+            rule = AlertLifecycle.create_rule(tenant, body, user, store)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_rule", "detail": str(e)}))
+        return {"status": "created", "rule": rule}
+
+    @app.get("/v1/monitoring/rules")
+    async def monitoring_list_rules(enabled_only: bool = False, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .monitoring import AlertLifecycle
+        rules = AlertLifecycle.list_rules(tenant, store)
+        if enabled_only:
+            rules = [r for r in rules if r["enabled"]]
+        return {"rules": rules}
+
+    @app.put("/v1/monitoring/rules/{rule_id}")
+    async def monitoring_update_rule(rule_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .monitoring import AlertLifecycle
+        try:
+            rule = AlertLifecycle.update_rule(tenant, rule_id, body, user, store)
+        except (LookupError) as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_update", "detail": str(e)}))
+        return {"status": "updated", "rule": rule}
+
+    @app.post("/v1/monitoring/evaluate")
+    async def monitoring_evaluate(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .monitoring import AlertEngine
+        store.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS alert_rule (
+              tenant_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
+              dataset_id TEXT NOT NULL, metric_id TEXT NOT NULL,
+              method TEXT NOT NULL DEFAULT 'seasonal_naive',
+              season_length INTEGER NOT NULL DEFAULT 7,
+              threshold REAL NOT NULL DEFAULT 3.0,
+              min_effect_size REAL NOT NULL DEFAULT 0.01,
+              persistence INTEGER NOT NULL DEFAULT 1,
+              owner TEXT NOT NULL, escalation TEXT DEFAULT '', runbook TEXT DEFAULT '',
+              enabled INTEGER NOT NULL DEFAULT 1,
+              created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              PRIMARY KEY (tenant_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS condition_state (
+              tenant_id TEXT NOT NULL, id TEXT NOT NULL, rule_id TEXT NOT NULL,
+              condition TEXT NOT NULL DEFAULT 'normal',
+              started_at TEXT, recovered_at TEXT,
+              PRIMARY KEY (tenant_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS alert_episode (
+              tenant_id TEXT NOT NULL, id TEXT NOT NULL, rule_id TEXT NOT NULL,
+              episode_identity TEXT NOT NULL, condition_id TEXT NOT NULL,
+              workflow_status TEXT NOT NULL DEFAULT 'open',
+              observed_value REAL, expected_lower REAL, expected_upper REAL,
+              scoring_method TEXT, training_window TEXT,
+              effect_size REAL, persistence_count INTEGER DEFAULT 0,
+              started_at TEXT NOT NULL, resolved_at TEXT, acknowledged_at TEXT,
+              acknowledged_by TEXT, resolution_notes TEXT,
+              PRIMARY KEY (tenant_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS alert_delivery (
+              tenant_id TEXT NOT NULL, episode_id TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'queued', suppressed_reason TEXT,
+              retry_count INTEGER DEFAULT 0, last_attempt TEXT,
+              PRIMARY KEY (tenant_id, episode_id)
+            );
+        """)
+        store.conn.commit()
+        fired = AlertEngine.evaluate_rules(tenant, store, store.conn)
+        evidence_ref = store.save_evidence(tenant, "monitoring_evaluate", {
+            "rules_evaluated": len(fired), "anomalies_fired": len(fired)})
+        store.audit(tenant, user, "monitoring.evaluate", tenant, "answered",
+                     {"evaluated": len(fired), "fired": len(fired)})
+        return {"status": "answered", "evaluated": len(fired), "anomalies_fired": len(fired), "episodes": fired}
+
+    @app.get("/v1/monitoring/conditions")
+    async def monitoring_conditions(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .monitoring import AlertLifecycle
+        return {"conditions": AlertLifecycle.list_condition_states(tenant, store)}
+
+    @app.get("/v1/monitoring/episodes")
+    async def monitoring_episodes(status: str | None = None, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .monitoring import AlertLifecycle
+        return {"episodes": AlertLifecycle.list_episodes(tenant, store, status)}
+
+    @app.put("/v1/monitoring/episodes/{episode_id}/status")
+    async def monitoring_transition_episode(episode_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .monitoring import AlertLifecycle
+        try:
+            ep = AlertLifecycle.transition_episode(tenant, episode_id, body["status"], user, store)
+        except (LookupError) as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+        return {"status": "updated", "episode": ep}
+
     app.state.store = store
     app.state.objects = objects
     return app
