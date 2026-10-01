@@ -1,18 +1,24 @@
 <script setup lang="ts">
 import { DEMO_ACTORS } from '~/composables/api'
+import { useLocale, SUPPORTED_LOCALES, loadMessages, t } from '~/composables/locale'
 
 const links = [
-  { to: '/', label: 'Overview' },
-  { to: '/uploads', label: 'Uploads' },
-  { to: '/datasets', label: 'Datasets' },
-  { to: '/metrics', label: 'Metrics' },
-  { to: '/forecasts', label: 'Forecasts' },
-  { to: '/workflow', label: 'Workflow' },
-  { to: '/scenarios', label: 'Scenarios' }
+  { to: '/', label: 'Overview', key: 'nav.home' },
+  { to: '/uploads', label: 'Uploads', key: 'nav.uploads' },
+  { to: '/datasets', label: 'Datasets', key: 'nav.datasets' },
+  { to: '/metrics', label: 'Metrics', key: 'nav.metrics' },
+  { to: '/forecasts', label: 'Forecasts', key: 'nav.forecasts' },
+  { to: '/workflow', label: 'Workflow', key: 'nav.workflow' },
+  { to: '/scenarios', label: 'Scenarios', key: 'nav.scenarios' },
+  { to: '/monitoring', label: 'Monitoring', key: 'nav.monitoring' }
 ]
 
 const { user, base } = useApi()
 const health = ref<'checking' | 'ok' | 'down'>('checking')
+const { locale, setLocale } = useLocale()
+
+// Load messages on startup
+await loadMessages(locale.value)
 
 async function ping() {
   try {
@@ -26,18 +32,25 @@ onMounted(() => { ping(); setInterval(ping, 15000) })
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell" :class="locale === 'ar' ? 'rtl' : ''">
     <header>
-      <span class="brand">DecisionOS</span>
+      <span class="brand">{{ t('common.appName', locale) }}</span>
       <nav aria-label="Primary">
-        <NuxtLink v-for="l in links" :key="l.to" :to="l.to">{{ l.label }}</NuxtLink>
+        <NuxtLink v-for="l in links" :key="l.to" :to="l.to">
+          {{ l.label }}
+        </NuxtLink>
       </nav>
       <div class="spacer" />
+      <select class="locale-picker" v-model="locale" @change="setLocale(locale)" aria-label="Language">
+        <option v-for="loc in SUPPORTED_LOCALES" :key="loc.code" :value="loc.code">
+          {{ loc.native }}
+        </option>
+      </select>
       <span class="badge" :class="health === 'ok' ? 'ok' : health === 'down' ? 'err' : 'warn'" :title="`Analytics API ${health}`">
         <span class="dot" /> API {{ health }}
       </span>
       <label class="actor">
-        <span class="muted">acting as</span>
+        <span class="muted">{{ t('common.status', locale) }}</span>
         <select v-model="user" aria-label="Acting user">
           <option v-for="(meta, id) in DEMO_ACTORS" :key="id" :value="id">{{ meta.label }}</option>
         </select>
@@ -54,10 +67,11 @@ onMounted(() => { ping(); setInterval(ping, 15000) })
 body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; color: #1a2333; }
 header { display: flex; align-items: center; gap: 1.25rem; padding: 0.75rem 1.5rem; border-bottom: 1px solid #e2e8f0; }
 .brand { font-weight: 700; }
-nav { display: flex; gap: 1rem; }
+nav { display: flex; gap: 1rem; flex-wrap: wrap; }
 nav a { text-decoration: none; color: #475569; }
 nav a.router-link-active { color: #0f766e; font-weight: 600; }
 .spacer { flex: 1; }
+.locale-picker { background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.2rem 0.4rem; font-size: 0.85rem; cursor: pointer; }
 .actor { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
 .actor select { padding: 0.25rem 0.4rem; border-radius: 6px; border: 1px solid #cbd5e1; }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 4px; }
@@ -83,4 +97,22 @@ label.field { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8
 .row { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
 code { background: #f1f5f9; padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
 .linklike { background: none; border: 0; color: #0f766e; cursor: pointer; padding: 0; text-decoration: underline; }
+
+/* RTL overrides — activated by .rtl class on shell */
+.rtl header { direction: rtl; }
+.rtl nav { flex-direction: row-reverse; }
+.rtl .locale-picker { direction: rtl; }
+.rtl table th,
+.rtl table td { text-align: right; }
+.rtl .stat { text-align: right; }
+.rtl .row { flex-direction: row-reverse; }
+
+/* Accessibility: focus visible, high contrast */
+*:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
+a, button, select, input, textarea { &:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; } }
+@media (prefers-contrast: more) {
+  body { color: #000; }
+  .muted { color: #333; }
+  th, td { border-color: #666; }
+}
 </style>

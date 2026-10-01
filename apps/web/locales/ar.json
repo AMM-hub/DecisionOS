@@ -1,0 +1,92 @@
+{
+  "common": {
+    "appName": "ديسبن أو إس",
+    "appTagline": "التحليلات وذكاء القرارات",
+    "loading": "جارٍ التحميل...",
+    "error": "خطأ",
+    "save": "حفظ",
+    "cancel": "إلغاء",
+    "create": "إنشاء",
+    "edit": "تعديل",
+    "delete": "حذف",
+    "search": "بحث",
+    "filter": "تصفية",
+    "noData": "لا توجد بيانات",
+    "status": "الحالة",
+    "actions": "إجراءات",
+    "submit": "إرسال",
+    "close": "إغلاق"
+  },
+  "nav": {
+    "home": "الرئيسية",
+    "uploads": "الرفع",
+    "datasets": "مجموعات البيانات",
+    "metrics": "المقاييس",
+    "forecasts": "التوقعات",
+    "workflow": "سير العمل",
+    "scenarios": "السيناريوهات",
+    "monitoring": "المراقبة",
+    "language": "اللغة"
+  },
+  "health": {
+    "title": "صحة البيانات",
+    "healthy": "سليم",
+    "stale": "قديم",
+    "suspended": "موقوف",
+    "unknown": "غير معروف",
+    "freshness": "الحداثة",
+    "revisions": "المراجعات",
+    "latestRevision": "آخر مراجعة",
+    "lastIngested": "آخر استيراد"
+  },
+  "monitoring": {
+    "title": "المراقبة والتنبيهات",
+    "description": "صحة البيانات، كشف الشذوذ السياقي، ودورة حياة التنبيهات.",
+    "dataHealth": "صحة البيانات",
+    "alertRules": "قواعد التنبيه",
+    "activeEpisodes": "الحلقات النشطة",
+    "history": "السجل",
+    "newRule": "+ قاعدة جديدة",
+    "createRule": "إنشاء قاعدة تنبيه",
+    "evaluate": "تقييم",
+    "enable": "تفعيل",
+    "disable": "تعطيل",
+    "acknowledge": "تأكيد",
+    "investigate": "تحقيق",
+    "resolve": "حل",
+    "dismiss": "تجاهل",
+    "ruleName": "الاسم",
+    "dataset": "مجموعة البيانات",
+    "metric": "المقياس",
+    "method": "الطريقة",
+    "threshold": "الحد",
+    "persistence": "الاستمرارية",
+    "owner": "المالك"
+  },
+  "workflow": {
+    "title": "تحليلات سير العمل",
+    "bottlenecks": "الاختناقات",
+    "variants": "المتغيرات",
+    "throughput": "الإنتاجية",
+    "caseMetrics": "مقاييس الحالات"
+  },
+  "forecasts": {
+    "title": "التوقعات",
+    "train": "تدريب النموذج",
+    "predict": "توقع",
+    "suitability": "الملاءمة"
+  },
+  "scenarios": {
+    "title": "السيناريوهات والقرارات",
+    "newScenario": "+ سيناريو جديد",
+    "decisions": "القرارات"
+  },
+  "time": {
+    "hours": "س",
+    "minutes": "د",
+    "days": "ي",
+    "justNow": "الآن",
+    "hoursAgo": "قبل {count} ساعة",
+    "daysAgo": "قبل {count} يوم"
+  }
+}

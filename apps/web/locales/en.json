@@ -1,0 +1,92 @@
+{
+  "common": {
+    "appName": "DecisionOS",
+    "appTagline": "Analytics & Decision Intelligence",
+    "loading": "Loading...",
+    "error": "Error",
+    "save": "Save",
+    "cancel": "Cancel",
+    "create": "Create",
+    "edit": "Edit",
+    "delete": "Delete",
+    "search": "Search",
+    "filter": "Filter",
+    "noData": "No data available",
+    "status": "Status",
+    "actions": "Actions",
+    "submit": "Submit",
+    "close": "Close"
+  },
+  "nav": {
+    "home": "Home",
+    "uploads": "Uploads",
+    "datasets": "Datasets",
+    "metrics": "Metrics",
+    "forecasts": "Forecasts",
+    "workflow": "Workflow",
+    "scenarios": "Scenarios",
+    "monitoring": "Monitoring",
+    "language": "Language"
+  },
+  "health": {
+    "title": "Data Health",
+    "healthy": "Healthy",
+    "stale": "Stale",
+    "suspended": "Suspended",
+    "unknown": "Unknown",
+    "freshness": "Freshness",
+    "revisions": "Revisions",
+    "latestRevision": "Latest Revision",
+    "lastIngested": "Last Ingested"
+  },
+  "monitoring": {
+    "title": "Monitoring & Alerts",
+    "description": "Data health, contextual anomaly detection, and alert lifecycle.",
+    "dataHealth": "Data Health",
+    "alertRules": "Alert Rules",
+    "activeEpisodes": "Active Episodes",
+    "history": "History",
+    "newRule": "+ New Rule",
+    "createRule": "Create Alert Rule",
+    "evaluate": "Evaluate",
+    "enable": "Enable",
+    "disable": "Disable",
+    "acknowledge": "Acknowledge",
+    "investigate": "Investigate",
+    "resolve": "Resolve",
+    "dismiss": "Dismiss",
+    "ruleName": "Name",
+    "dataset": "Dataset",
+    "metric": "Metric",
+    "method": "Method",
+    "threshold": "Threshold",
+    "persistence": "Persistence",
+    "owner": "Owner"
+  },
+  "workflow": {
+    "title": "Workflow Analytics",
+    "bottlenecks": "Bottlenecks",
+    "variants": "Variants",
+    "throughput": "Throughput",
+    "caseMetrics": "Case Metrics"
+  },
+  "forecasts": {
+    "title": "Forecasts",
+    "train": "Train Model",
+    "predict": "Predict",
+    "suitability": "Suitability"
+  },
+  "scenarios": {
+    "title": "Scenarios & Decisions",
+    "newScenario": "+ New Scenario",
+    "decisions": "Decisions"
+  },
+  "time": {
+    "hours": "h",
+    "minutes": "min",
+    "days": "d",
+    "justNow": "Just now",
+    "hoursAgo": "{count}h ago",
+    "daysAgo": "{count}d ago"
+  }
+}
