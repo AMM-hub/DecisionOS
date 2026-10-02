@@ -539,6 +539,33 @@ export interface WorkflowThroughputResponse {
   evidence_ref: string
 }
 
+// ---- scenario studio (M4, spec §17) --------------------------------------
+export interface ScenarioTemplateSection {
+  id: string
+  title: string
+  description: string
+}
+
+export interface ScenarioTemplate {
+  template_id: string
+  name: string
+  description: string
+  sections: ScenarioTemplateSection[]
+}
+
+export interface ScenarioSolveResponse {
+  status: 'optimal' | 'feasible_time_limited' | 'infeasible' | 'unbounded' | 'no_feasible_solution_found' | 'failed' | 'cancelled'
+  template: string
+  objective: number | null
+  bound: number | null
+  gap: number | null
+  solver: string | null
+  solver_version: string | null
+  runtime: number | null
+  variable_count: number
+  infeasibility_report: { method: string; conflict_constraints?: string[]; note?: string } | null
+}
+
 // ---- api error ------------------------------------------------------------
 export interface ApiErrorBody {
   status: number

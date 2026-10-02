@@ -648,8 +648,8 @@ def create_app(data_dir: Path) -> FastAPI:
     async def scenario_solve(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         from .optimization import AllocationInputs, solve_allocation
 
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
+        # ctx() validates both that x_user belongs to x_tenant (§23.4 cross-tenant isolation)
+        ctx(x_tenant, x_user)
 
         body = await request.json()
         template = body.get("template", "reallocate-capacity")
@@ -683,10 +683,8 @@ def create_app(data_dir: Path) -> FastAPI:
                 integer=bool(body.get("integer", False)),
             )
         except Exception as e:
-            return JSONResponse(status_code=200, content={
-                "status": "failed", "reason": str(e),
-                "template": template,
-            })
+            # DOS-QA-004: Solver exceptions are client-facing invalid inputs, not silent 200 OK.
+            raise HTTPException(422, json.dumps({"code": "solver_error", "detail": str(e)}))
 
         return {
             "status": result.status,
@@ -704,8 +702,8 @@ def create_app(data_dir: Path) -> FastAPI:
     # ---- decision register (M4, spec §19) ---------------------------------
     @app.post("/v1/decisions", status_code=201)
     async def create_decision_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
+        # ctx() validates both credentials and cross-tenant ownership (§23.4)
+        ctx(x_tenant, x_user)
         body = await request.json()
         from .register import (
             DECISION_SCHEMA, CounterevidenceCheck, CounterevidenceState,
@@ -727,8 +725,8 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.get("/v1/decisions")
     async def list_decisions_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
+        # ctx() validates both credentials and cross-tenant ownership (§23.4)
+        ctx(x_tenant, x_user)
         from .register import DECISION_SCHEMA, list_decisions as _list
         store.conn.executescript(DECISION_SCHEMA)
         recs = _list(store.conn, x_tenant)
@@ -736,8 +734,8 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.get("/v1/decisions/{decision_id}")
     async def get_decision_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
+        # ctx() validates both credentials and cross-tenant ownership (§23.4)
+        ctx(x_tenant, x_user)
         from .register import DECISION_SCHEMA, get_decision as _get
         store.conn.executescript(DECISION_SCHEMA)
         rec = _get(store.conn, x_tenant, decision_id)
@@ -747,8 +745,8 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/decisions/{decision_id}/transition")
     async def transition_decision_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
+        # ctx() validates both credentials and cross-tenant ownership (§23.4)
+        ctx(x_tenant, x_user)
         body = await request.json()
         from .register import DECISION_SCHEMA, DecisionStatus, transition_status
         store.conn.executescript(DECISION_SCHEMA)
@@ -763,8 +761,8 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/decisions/{decision_id}/outcome")
     async def outcome_decision_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
+        # ctx() validates both credentials and cross-tenant ownership (§23.4)
+        ctx(x_tenant, x_user)
         body = await request.json()
         from .register import DECISION_SCHEMA, OutcomeRecord, Verdict, record_outcome
         store.conn.executescript(DECISION_SCHEMA)

@@ -65,8 +65,8 @@ function fillDefaults() {
       for (const q of queues) {
         for (const t of periods) {
           for (const k of segments) {
-            swk = JSON.stringify([g, q, k, t])
-            mrk = JSON.stringify([g, q, k, t])
+            const swk = JSON.stringify([g, q, k, t])
+            const mrk = JSON.stringify([g, q, k, t])
             p.segment_width[swk] = p.segment_width[swk] ?? (k === 1 ? 160 : 40)
             p.marginal_rate[mrk] = p.marginal_rate[mrk] ?? (k === 1 ? 2.0 : 1.5)
           }
@@ -114,8 +114,8 @@ function statusBadge(s: string) {
           </option>
         </select>
       </label>
-      <p v-if="templates.find(t => t.template_id === activeTemplate)" class="muted">
-        {{ templates.find(t => t.template_id === activeTemplate)?.description }}
+      <p v-if="templates.find((t: ScenarioTemplate) => t.template_id === activeTemplate)" class="muted">
+        {{ templates.find((t: ScenarioTemplate) => t.template_id === activeTemplate)?.description }}
       </p>
     </div>
 
@@ -146,7 +146,7 @@ function statusBadge(s: string) {
           <span class="muted">Objective</span>
         </div>
         <div class="stat">
-          <div class="n">{{ result.runtime.toFixed(3) }}s</div>
+          <div class="n">{{ result.runtime != null ? result.runtime.toFixed(3) + 's' : '—' }}</div>
           <span class="muted">Runtime</span>
         </div>
         <div class="stat">

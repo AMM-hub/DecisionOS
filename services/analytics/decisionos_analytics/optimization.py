@@ -278,8 +278,8 @@ def solve_allocation(
             bound_val = prob.solver.model.getObjBound()  # type: ignore[union-attr]
             if bound_val is not None and obj_val != 0:
                 gap_val = abs(obj_val - bound_val) / abs(obj_val)
-        except Exception:
-            pass
+        except Exception as _gap_exc:  # DOS-QA-008: log, do not silently swallow
+            logging.getLogger(__name__).debug("bound/gap unavailable: %s", _gap_exc)
 
     infeas_report = None
     if lp_status == "infeasible":

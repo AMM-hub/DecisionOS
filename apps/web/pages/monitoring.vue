@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <h1>Monitoring & Alerts</h1>
+    <h1>Monitoring &amp; Alerts</h1>
     <p class="muted">Data health, contextual anomaly detection, and alert lifecycle (spec §14).</p>
 
     <div class="tabs">
@@ -141,6 +141,24 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import type {
+  MonitoringHealthDataset,
+  MonitoringAlertRule,
+  MonitoringAlertEpisode,
+  MonitoringCreateRuleRequest,
+} from '~/shared/types'
+
+// DOS-QA-002: use the useApi() composable so all requests go to the configured
+// apiBase (http://localhost:8100/v1) and carry correct X-Tenant/X-User headers.
+// Raw fetch('/v1/...') relative URLs target port 3000 and bypass the composable's
+// credential injection entirely.
+const { get, post } = useApi()
+const put = <T>(path: string, body?: unknown) =>
+  useApi().call<T>(path, {
+    method: 'PUT',
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
 
 const tabs = [
   { id: 'health', label: 'Data Health' },
@@ -153,14 +171,14 @@ const activeTab = ref('health')
 // Health
 const healthLoading = ref(false)
 const healthError = ref('')
-const healthData = ref<any[]>([])
+const healthData = ref<MonitoringHealthDataset[]>([])
 
 // Rules
 const rulesLoading = ref(false)
-const rules = ref<any[]>([])
+const rules = ref<MonitoringAlertRule[]>([])
 const showNewRuleForm = ref(false)
 const ruleError = ref('')
-const newRule = ref({
+const newRule = ref<MonitoringCreateRuleRequest>({
   name: '',
   dataset_id: '',
   metric_id: '',
@@ -171,22 +189,22 @@ const newRule = ref({
 
 // Episodes
 const episodesLoading = ref(false)
-const episodeList = ref<any[]>([])
+const episodeList = ref<MonitoringAlertEpisode[]>([])
 const historyLoading = ref(false)
-const historyList = ref<any[]>([])
+const historyList = ref<MonitoringAlertEpisode[]>([])
 
 function healthBadgeClass(status: string): string {
-  return { healthy: 'green', stale: 'yellow', suspended: 'red', unknown: 'gray' }[status] || 'gray'
+  return ({ healthy: 'green', stale: 'yellow', suspended: 'red', unknown: 'gray' } as Record<string, string>)[status] || 'gray'
 }
 
 function episodeBadgeClass(status: string): string {
-  return {
+  return ({
     open: 'yellow',
     acknowledged: 'blue',
     investigating: 'orange',
     resolved: 'green',
     dismissed: 'gray',
-  }[status] || 'gray'
+  } as Record<string, string>)[status] || 'gray'
 }
 
 function canTransition(status: string): boolean {
@@ -206,14 +224,10 @@ async function loadHealth() {
   healthLoading.value = true
   healthError.value = ''
   try {
-    const res = await fetch('/v1/monitoring/health', {
-      headers: { 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-    })
-    if (!res.ok) { healthError.value = `HTTP ${res.status}`; return }
-    const data = await res.json()
+    const data = await get<MonitoringHealthDataset[]>('/monitoring/health')
     healthData.value = Array.isArray(data) ? data : []
-  } catch (e: any) {
-    healthError.value = e.message || 'Failed to load health data'
+  } catch (e: unknown) {
+    healthError.value = e instanceof Error ? e.message : 'Failed to load health data'
   } finally {
     healthLoading.value = false
   }
@@ -222,10 +236,7 @@ async function loadHealth() {
 async function loadRules() {
   rulesLoading.value = true
   try {
-    const res = await fetch('/v1/monitoring/rules', {
-      headers: { 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-    })
-    const data = await res.json()
+    const data = await get<{ rules: MonitoringAlertRule[] }>('/monitoring/rules')
     rules.value = data.rules || []
   } catch {
     rules.value = []
@@ -237,38 +248,25 @@ async function loadRules() {
 async function createRule() {
   ruleError.value = ''
   try {
-    const res = await fetch('/v1/monitoring/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-      body: JSON.stringify(newRule.value),
-    })
-    if (!res.ok) { ruleError.value = `HTTP ${res.status}`; return }
+    await post('/monitoring/rules', newRule.value)
     showNewRuleForm.value = false
     newRule.value = { name: '', dataset_id: '', metric_id: '', method: 'seasonal_naive', threshold: 3.0, persistence: 1 }
     await loadRules()
-  } catch (e: any) {
-    ruleError.value = e.message || 'Create failed'
+  } catch (e: unknown) {
+    ruleError.value = e instanceof Error ? e.message : 'Create failed'
   }
 }
 
-async function toggleRule(rule: any) {
+async function toggleRule(rule: MonitoringAlertRule) {
   try {
-    await fetch(`/v1/monitoring/rules/${rule.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-      body: JSON.stringify({ enabled: !rule.enabled }),
-    })
+    await put(`/monitoring/rules/${rule.id}`, { enabled: !rule.enabled })
     await loadRules()
   } catch { /* ignore */ }
 }
 
 async function evaluateRule(ruleId: string) {
   try {
-    await fetch('/v1/monitoring/evaluate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-      body: JSON.stringify({ rule_ids: [ruleId] }),
-    })
+    await post('/monitoring/evaluate', { rule_ids: [ruleId] })
     await loadEpisodes()
   } catch { /* ignore */ }
 }
@@ -276,10 +274,7 @@ async function evaluateRule(ruleId: string) {
 async function loadEpisodes() {
   episodesLoading.value = true
   try {
-    const res = await fetch('/v1/monitoring/episodes?status=open,acknowledged,investigating', {
-      headers: { 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-    })
-    const data = await res.json()
+    const data = await get<{ episodes: MonitoringAlertEpisode[] }>('/monitoring/episodes?status=open,acknowledged,investigating')
     episodeList.value = data.episodes || []
   } catch {
     episodeList.value = []
@@ -291,10 +286,7 @@ async function loadEpisodes() {
 async function loadHistory() {
   historyLoading.value = true
   try {
-    const res = await fetch('/v1/monitoring/episodes?status=resolved,dismissed', {
-      headers: { 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-    })
-    const data = await res.json()
+    const data = await get<{ episodes: MonitoringAlertEpisode[] }>('/monitoring/episodes?status=resolved,dismissed')
     historyList.value = data.episodes || []
   } catch {
     historyList.value = []
@@ -305,11 +297,7 @@ async function loadHistory() {
 
 async function transitionEpisode(episodeId: string, status: string) {
   try {
-    await fetch(`/v1/monitoring/episodes/${episodeId}/status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Tenant': 'tenant_alpha', 'X-User': 'alpha.manager' },
-      body: JSON.stringify({ status }),
-    })
+    await put(`/monitoring/episodes/${episodeId}/status`, { status })
     await loadEpisodes()
     await loadHistory()
   } catch { /* ignore */ }
