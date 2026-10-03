@@ -1106,6 +1106,103 @@ def create_app(data_dir: Path) -> FastAPI:
         except EvidenceError as e:
             raise HTTPException(404, "not found")
 
+    # ---- investigations (D2, spec §10, §14, §15) --------------------------
+    @app.post("/v1/investigations", status_code=201)
+    async def create_investigation_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .investigations import InvestigationError, SourceType, create_investigation
+        try:
+            st = SourceType(body.get("source_type", "ad_hoc"))
+            return create_investigation(
+                store=store, tenant_id=tenant, title=body["title"], question=body["question"],
+                owner=body.get("owner", user), user_id=user, source_type=st, source_id=body.get("source_id"),
+                analytical_state=body.get("analytical_state"), alternative_explanations=body.get("alternative_explanations")
+            )
+        except InvestigationError as e:
+            if e.code == "source_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_investigation", "detail": str(e)}))
+
+    @app.get("/v1/investigations")
+    async def list_investigations_api(
+        status: str | None = None, owner: str | None = None, source_type: str | None = None,
+        x_tenant: str = Header(default=None), x_user: str = Header(default=None)
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .investigations import list_investigations
+        return list_investigations(store, tenant, status=status, owner=owner, source_type=source_type)
+
+    @app.get("/v1/investigations/{investigation_id}")
+    async def get_investigation_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .investigations import InvestigationError, get_investigation
+        try:
+            return get_investigation(store, tenant, investigation_id)
+        except InvestigationError:
+            raise HTTPException(404, "not found")
+
+    @app.post("/v1/investigations/{investigation_id}/status")
+    async def update_investigation_status_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .investigations import InvestigationError, InvestigationStatus, update_investigation_status
+        try:
+            ns = InvestigationStatus(body["status"])
+            return update_investigation_status(store, tenant, investigation_id, ns, user)
+        except InvestigationError as e:
+            if e.code == "investigation_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+
+    @app.post("/v1/investigations/{investigation_id}/claims", status_code=201)
+    async def add_claim_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .evidence import EvidenceType, SupportStatus
+        from .investigations import InvestigationError, add_claim
+        try:
+            et = EvidenceType(body.get("evidence_type", "observed"))
+            ss = SupportStatus(body.get("support_status", "supporting"))
+            return add_claim(
+                store=store, tenant_id=tenant, investigation_id=investigation_id, statement=body["statement"],
+                user_id=user, evidence_type=et, support_status=ss, quality_flags=body.get("quality_flags"),
+                structured_fact=body.get("structured_fact"), evidence_id=body.get("evidence_id")
+            )
+        except InvestigationError as e:
+            if e.code in ("investigation_not_found", "evidence_not_found"):
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_claim", "detail": str(e)}))
+
+    @app.get("/v1/investigations/{investigation_id}/claims")
+    async def list_claims_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .investigations import InvestigationError, get_investigation
+        try:
+            inv = get_investigation(store, tenant, investigation_id)
+            return inv["claims"]
+        except InvestigationError:
+            raise HTTPException(404, "not found")
+
+    @app.post("/v1/monitoring/episodes/{episode_id}/investigate")
+    async def episode_investigate_api(episode_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        from .investigations import InvestigationError, investigate_episode
+        try:
+            inv, created = investigate_episode(store, tenant, episode_id, user)
+            status_code = 201 if created else 200
+            return JSONResponse(status_code=status_code, content=inv)
+        except InvestigationError as e:
+            if e.code == "episode_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+
     app.state.store = store
     app.state.objects = objects
     return app
