@@ -220,6 +220,95 @@ CREATE TABLE IF NOT EXISTS alert_delivery (
   last_attempt TEXT,
   PRIMARY KEY (tenant_id, episode_id)
 );
+
+CREATE TABLE IF NOT EXISTS decision (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  brief_json TEXT NOT NULL,
+  counterevidence_json TEXT NOT NULL DEFAULT '[]',
+  amendments_json TEXT NOT NULL DEFAULT '[]',
+  outcome_json TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS investigation (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  question TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'ad_hoc',
+  source_id TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  owner TEXT NOT NULL,
+  analytical_state_json TEXT NOT NULL DEFAULT '{}',
+  alternative_explanations_json TEXT NOT NULL DEFAULT '[]',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS evidence_artifact (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  investigation_id TEXT NOT NULL,
+  parent_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+  evidence_type TEXT NOT NULL DEFAULT 'observed',
+  support_status TEXT NOT NULL DEFAULT 'supporting',
+  quality_flags_json TEXT NOT NULL DEFAULT '[]',
+  metric_id TEXT NOT NULL,
+  definition_version INTEGER NOT NULL DEFAULT 1,
+  dataset_id TEXT NOT NULL,
+  dataset_revision INTEGER NOT NULL DEFAULT 1,
+  resolved_plan_json TEXT NOT NULL DEFAULT '{}',
+  query_params_json TEXT NOT NULL DEFAULT '{}',
+  canonical_digest TEXT NOT NULL,
+  storage_format TEXT NOT NULL DEFAULT 'json',
+  payload_json TEXT,
+  parquet_key TEXT,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  exactness_class TEXT NOT NULL DEFAULT 'exact',
+  reproducibility_status TEXT NOT NULL DEFAULT 'reproducible',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id, investigation_id) REFERENCES investigation(tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS investigation_claim (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  investigation_id TEXT NOT NULL,
+  evidence_id TEXT,
+  statement TEXT NOT NULL,
+  evidence_type TEXT NOT NULL DEFAULT 'observed',
+  support_status TEXT NOT NULL DEFAULT 'supporting',
+  quality_flags_json TEXT NOT NULL DEFAULT '[]',
+  structured_fact_json TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id, investigation_id) REFERENCES investigation(tenant_id, id),
+  FOREIGN KEY (tenant_id, evidence_id) REFERENCES evidence_artifact(tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS decision_evidence_binding (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  decision_id TEXT NOT NULL,
+  evidence_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'primary_support',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  UNIQUE (tenant_id, decision_id, evidence_id),
+  FOREIGN KEY (tenant_id, decision_id) REFERENCES decision(tenant_id, id),
+  FOREIGN KEY (tenant_id, evidence_id) REFERENCES evidence_artifact(tenant_id, id)
+);
 """
 
 
