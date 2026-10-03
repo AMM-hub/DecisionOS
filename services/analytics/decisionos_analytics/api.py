@@ -1043,6 +1043,69 @@ def create_app(data_dir: Path) -> FastAPI:
                 results.append({"id": metric_id, "label": get_label(labels, locale)})
         return {"query": query, "locale": locale, "query_normalized": normalize_search(query), "results": results}
 
+    # ---- evidence artifacts (D2, spec §10, §16) ---------------------------
+    @app.post("/v1/evidence", status_code=201)
+    async def create_evidence_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .evidence import EvidenceError, EvidenceType, SupportStatus, capture_evidence
+        try:
+            investigation_id = body["investigation_id"]
+            metric_id = body["metric_id"]
+            query_params = body.get("query_params", {})
+            evidence_type = EvidenceType(body.get("evidence_type", "observed"))
+            support_status = SupportStatus(body.get("support_status", "supporting"))
+            parent_ids = body.get("parent_artifact_ids", [])
+            allow_sampling = body.get("allow_sampling", False)
+
+            req_data = dict(query_params)
+            req_data["metric_id"] = metric_id
+            req_data["schema_version"] = req_data.get("schema_version", "1.0")
+            if "window" not in req_data:
+                req_data["window"] = {"start": "2024-01-01T00:00:00Z", "end": "2024-12-31T23:59:59Z", "timezone": "UTC"}
+            elif "timezone" not in req_data["window"]:
+                req_data["window"]["timezone"] = "UTC"
+            req = MetricQueryRequest.model_validate(req_data)
+
+            pub = store.conn.execute(
+                "SELECT * FROM definition_publication WHERE tenant_id=? AND definition_id=? AND effective_to IS NULL",
+                (tenant, metric_id),
+            ).fetchone()
+            if pub is None:
+                raise HTTPException(404, "not found")  # §23.4 non-disclosing
+            content = MetricDefinitionContent.model_validate(json.loads(store.conn.execute(
+                "SELECT content FROM definition_version WHERE tenant_id=? AND definition_id=? AND version=?",
+                (tenant, metric_id, pub["version"])).fetchone()["content"]))
+            ds = store.conn.execute("SELECT * FROM dataset WHERE tenant_id=? AND id=?", (tenant, content.dataset_id)).fetchone()
+            if ds is None or ds["published_revision"] is None:
+                raise HTTPException(404, "not found")  # §23.4 non-disclosing
+            rev = store.conn.execute("SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
+                                     (tenant, ds["id"], ds["published_revision"])).fetchone()
+            manifest = json.loads(rev["manifest"])
+            frame = pl.read_parquet(io.BytesIO(objects.get_revision_object(manifest["objects"][0]["key"])))
+
+            result = capture_evidence(
+                store, objects, tenant, user, investigation_id, content, req, frame,
+                ds["published_revision"], evidence_type=evidence_type, support_status=support_status,
+                parent_artifact_ids=parent_ids, allow_sampling=allow_sampling
+            )
+            return result
+        except EvidenceError as e:
+            if e.code == "investigation_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_evidence_request", "detail": str(e)}))
+
+    @app.get("/v1/evidence/{evidence_id}")
+    async def get_evidence_api(evidence_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .evidence import EvidenceError, get_evidence
+        try:
+            return get_evidence(store, objects, tenant, evidence_id)
+        except EvidenceError as e:
+            raise HTTPException(404, "not found")
+
     app.state.store = store
     app.state.objects = objects
     return app
