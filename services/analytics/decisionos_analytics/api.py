@@ -820,6 +820,30 @@ def create_app(data_dir: Path) -> FastAPI:
         store.audit(x_tenant, x_user, "decision.outcome", decision_id, "recorded", {"verdict": body["review_verdict"]})
         return _decision_to_dict(rec)
 
+    @app.post("/v1/decisions/{decision_id}/evidence", status_code=201)
+    async def bind_decision_evidence_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        ctx(x_tenant, x_user)
+        body = await request.json()
+        from .register import BindingRole, bind_evidence as _bind
+        try:
+            role = BindingRole(body.get("binding_role", "primary_support"))
+            res = _bind(store.conn, x_tenant, decision_id, body["evidence_id"], role, x_user)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_binding", "detail": str(e)}))
+        store.audit(x_tenant, x_user, "decision.bind_evidence", decision_id, "bound", {"evidence_id": body["evidence_id"], "role": role.value})
+        return res
+
+    @app.get("/v1/decisions/{decision_id}/evidence")
+    async def list_decision_evidence_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        ctx(x_tenant, x_user)
+        from .register import list_decision_evidence as _list_ev
+        try:
+            return _list_ev(store.conn, x_tenant, decision_id)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+
     def _decision_to_dict(rec) -> dict:
         from .register import DecisionRecord
         return {

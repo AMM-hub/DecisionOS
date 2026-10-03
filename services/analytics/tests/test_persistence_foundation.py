@@ -100,16 +100,16 @@ def test_decision_evidence_binding_tenant_isolation(tmp_path):
     # Valid binding
     bind_id = new_id()
     conn.execute(
-        "INSERT INTO decision_evidence_binding(tenant_id, id, decision_id, evidence_id, role, created_at) VALUES (?,?,?,?,?,?)",
-        ("tenant_alpha", bind_id, dec_alpha, ev_alpha, "primary_support", now_iso()),
+        "INSERT INTO decision_evidence_binding(tenant_id, id, decision_id, evidence_id, binding_role, bound_by, bound_at) VALUES (?,?,?,?,?,?,?)",
+        ("tenant_alpha", bind_id, dec_alpha, ev_alpha, "primary_support", "user1", now_iso()),
     )
     conn.commit()
 
     # Duplicate binding should fail
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO decision_evidence_binding(tenant_id, id, decision_id, evidence_id, role, created_at) VALUES (?,?,?,?,?,?)",
-            ("tenant_alpha", new_id(), dec_alpha, ev_alpha, "primary_support", now_iso()),
+            "INSERT INTO decision_evidence_binding(tenant_id, id, decision_id, evidence_id, binding_role, bound_by, bound_at) VALUES (?,?,?,?,?,?,?)",
+            ("tenant_alpha", new_id(), dec_alpha, ev_alpha, "primary_support", "user1", now_iso()),
         )
         conn.commit()
 
@@ -123,8 +123,8 @@ def test_decision_evidence_binding_tenant_isolation(tmp_path):
 
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO decision_evidence_binding(tenant_id, id, decision_id, evidence_id, role, created_at) VALUES (?,?,?,?,?,?)",
-            ("tenant_beta", new_id(), dec_beta, ev_alpha, "primary_support", now_iso()),
+            "INSERT INTO decision_evidence_binding(tenant_id, id, decision_id, evidence_id, binding_role, bound_by, bound_at) VALUES (?,?,?,?,?,?,?)",
+            ("tenant_beta", new_id(), dec_beta, ev_alpha, "primary_support", "user2", now_iso()),
         )
         conn.commit()
 
