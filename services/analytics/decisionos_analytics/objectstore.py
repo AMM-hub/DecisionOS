@@ -68,4 +68,3 @@ class LocalObjectStore:
     def delete_quarantine(self, key: str) -> None:
         p = self._safe(f"quarantine/{key}")
         p.unlink(missing_ok=True)
-

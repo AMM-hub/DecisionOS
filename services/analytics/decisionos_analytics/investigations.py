@@ -180,11 +180,16 @@ def update_investigation_status(
     store: Store,
     tenant_id: str,
     investigation_id: str,
-    new_status: InvestigationStatus,
+    new_status: InvestigationStatus | str,
     user_id: str,
 ) -> dict:
     inv = get_investigation(store, tenant_id, investigation_id)
     current_status = InvestigationStatus(inv["status"])
+    if isinstance(new_status, str):
+        try:
+            new_status = InvestigationStatus(new_status)
+        except ValueError:
+            raise InvestigationError("invalid_status", f"Invalid status '{new_status}'")
 
     if new_status not in VALID_STATUS_TRANSITIONS.get(current_status, set()):
         raise InvestigationError(
