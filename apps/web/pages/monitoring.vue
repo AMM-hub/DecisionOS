@@ -100,6 +100,9 @@
               <tr><td>Started</td><td>{{ formatDate(ep.started_at) }}</td></tr>
             </table>
             <div v-if="canTransition(ep.workflow_status)" class="actions">
+              <button class="btn btn-xs btn-primary" @click="launchInvestigation(ep.id)">
+                Launch Investigation
+              </button>
               <button v-if="ep.workflow_status === 'open'" class="btn btn-xs"
                       @click="transitionEpisode(ep.id, 'acknowledged')">Acknowledge</button>
               <button v-if="ep.workflow_status === 'acknowledged'" class="btn btn-xs"
@@ -146,6 +149,7 @@ import type {
   MonitoringAlertRule,
   MonitoringAlertEpisode,
   MonitoringCreateRuleRequest,
+  Investigation,
 } from '~/shared/types'
 
 // DOS-QA-002: use the useApi() composable so all requests go to the configured
@@ -292,6 +296,15 @@ async function loadHistory() {
     historyList.value = []
   } finally {
     historyLoading.value = false
+  }
+}
+
+async function launchInvestigation(episodeId: string) {
+  try {
+    const inv = await post<Investigation>(`/monitoring/episodes/${episodeId}/investigate`)
+    navigateTo(`/investigations/${inv.id}`)
+  } catch (e: unknown) {
+    alert(e instanceof Error ? e.message : 'Launch investigation failed')
   }
 }
 
