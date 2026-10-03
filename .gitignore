@@ -17,5 +17,6 @@ __pycache__/
 *.png
 services/analytics/.tmp/
 *.sqlite
+.coverage
 apps/api/storage/framework/views/
 apps/api/bootstrap/cache/

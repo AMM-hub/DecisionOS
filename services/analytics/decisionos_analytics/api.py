@@ -79,6 +79,25 @@ def create_app(data_dir: Path) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.exception_handler(json.JSONDecodeError)
+    async def json_decode_error_handler(request: Request, exc: json.JSONDecodeError):
+        return JSONResponse(
+            status_code=400,
+            content={"code": "malformed_json", "detail": "Invalid JSON body format."}
+        )
+
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError):
+        if "JSON" in str(exc) or "Expecting value" in str(exc):
+            return JSONResponse(
+                status_code=400,
+                content={"code": "malformed_request", "detail": "Invalid request body."}
+            )
+        return JSONResponse(
+            status_code=422,
+            content={"code": "invalid_value", "detail": str(exc)}
+        )
+
     @app.get("/v1/health")
     async def health():
         return {"status": "ok", "service": "analytics-control-plane", "mode": "demo-stand-in", "time": now_iso()}
@@ -105,11 +124,15 @@ def create_app(data_dir: Path) -> FastAPI:
         body = await request.json()
         upload_id = new_id()
         qkey = f"{tenant}/{body.get('workspace_id','ws-support-ops')}/{upload_id}/{Path(body['filename']).name}"
-        store.conn.execute(
-            "INSERT INTO upload(tenant_id,id,workspace_id,created_by,filename,quarantine_key,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (tenant, upload_id, body.get("workspace_id", "ws-support-ops"), user, body["filename"], qkey, "initiated", now_iso()),
-        )
-        store.conn.commit()
+        import sqlite3
+        try:
+            store.conn.execute(
+                "INSERT INTO upload(tenant_id,id,workspace_id,created_by,filename,quarantine_key,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (tenant, upload_id, body.get("workspace_id", "ws-support-ops"), user, body["filename"], qkey, "initiated", now_iso()),
+            )
+            store.conn.commit()
+        except (sqlite3.IntegrityError, KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_upload_request", "detail": str(e)}))
         return {
             "upload_id": upload_id,
             "method": "PUT",
@@ -674,6 +697,9 @@ def create_app(data_dir: Path) -> FastAPI:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             raise HTTPException(422, json.dumps({"code": "invalid_inputs", "detail": str(e)}))
 
+        import logging
+        import pulp as plp
+
         try:
             result = solve_allocation(
                 inputs,
@@ -682,9 +708,16 @@ def create_app(data_dir: Path) -> FastAPI:
                 timelimit=int(body.get("timelimit", 30)),
                 integer=bool(body.get("integer", False)),
             )
-        except Exception as e:
-            # DOS-QA-004: Solver exceptions are client-facing invalid inputs, not silent 200 OK.
+        except (plp.PulpError, ValueError) as e:
+            # Domain solver input/configuration error
             raise HTTPException(422, json.dumps({"code": "solver_error", "detail": str(e)}))
+        except Exception as e:
+            # Unexpected internal solver/system failure -> 500 with safe error body
+            logging.getLogger(__name__).exception("Unexpected solver internal error: %s", e)
+            return JSONResponse(
+                status_code=500,
+                content={"code": "solver_internal_error", "detail": "The optimization request could not be completed."}
+            )
 
         return {
             "status": result.status,

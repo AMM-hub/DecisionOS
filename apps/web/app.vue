@@ -37,7 +37,7 @@ onMounted(() => { ping(); setInterval(ping, 15000) })
       <span class="brand">{{ t('common.appName', locale) }}</span>
       <nav aria-label="Primary">
         <NuxtLink v-for="l in links" :key="l.to" :to="l.to">
-          {{ l.label }}
+          {{ t(l.key, locale) }}
         </NuxtLink>
       </nav>
       <div class="spacer" />

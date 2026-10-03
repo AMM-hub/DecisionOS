@@ -354,3 +354,90 @@ def test_api_evaluate_no_rules(client, alpha_headers):
     body = r.json()
     assert body["status"] == "answered"
     assert isinstance(body["evaluated"], int)
+
+
+# ======================================================================
+# Additional Edge Case & Branch Coverage Tests
+# ======================================================================
+
+def test_load_metric_series_missing_dataset(client):
+    """_load_metric_series raises LookupError for non-existent dataset."""
+    from decisionos_analytics.monitoring import _load_metric_series
+    store = client.app.state.store
+    with pytest.raises(LookupError, match="no published revision"):
+        _load_metric_series("tenant_alpha", "nonexistent_ds", "metric_1", store)
+
+
+def test_alert_lifecycle_update_rule_not_found(client):
+    """Updating a non-existent rule raises LookupError."""
+    store = client.app.state.store
+    with pytest.raises(LookupError, match="rule fake-id not found"):
+        AlertLifecycle.update_rule("tenant_alpha", "fake-id", {"threshold": 5.0}, "tester", store)
+
+
+def test_alert_lifecycle_update_rule_no_updatable_fields(client):
+    """Updating a rule with invalid/unsupported fields raises ValueError."""
+    store = client.app.state.store
+    rule = AlertLifecycle.create_rule("tenant_alpha", {
+        "name": "Field Test", "dataset_id": "ds-1", "metric_id": "m-1", "owner": "tester"
+    }, "tester", store)
+    with pytest.raises(ValueError, match="no updatable fields"):
+        AlertLifecycle.update_rule("tenant_alpha", rule["id"], {"invalid_field": 123}, "tester", store)
+
+
+def test_alert_episode_transition_dismissed(client):
+    """Episode transition to 'dismissed' status."""
+    store = client.app.state.store
+    rule = AlertLifecycle.create_rule("tenant_alpha", {
+        "name": "Dismiss Test", "dataset_id": "ds-1", "metric_id": "m-1", "owner": "tester"
+    }, "tester", store)
+
+    import uuid
+    ep_id = str(uuid.uuid4())
+    cond_id = str(uuid.uuid4())
+    store.conn.execute(
+        "INSERT INTO condition_state(tenant_id,id,rule_id,condition,started_at) VALUES (?,?,?,?,?)",
+        ("tenant_alpha", cond_id, rule["id"], "active", "2026-01-01T00:00:00Z"),
+    )
+    store.conn.execute(
+        "INSERT INTO alert_episode(tenant_id,id,rule_id,episode_identity,condition_id,"
+        "workflow_status,observed_value,started_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("tenant_alpha", ep_id, rule["id"], "dismiss:identity", cond_id,
+         "open", 100.0, "2026-01-01T00:00:00Z"),
+    )
+    store.conn.commit()
+
+    ep = AlertLifecycle.transition_episode("tenant_alpha", ep_id, "dismissed", "tester", store)
+    assert ep["workflow_status"] == "dismissed"
+
+
+def test_api_episode_status_transition_endpoint(client, alpha_headers, beta_headers):
+    """POST /v1/monitoring/episodes/{id}/status endpoint transition & tenant isolation."""
+    store = client.app.state.store
+    rule = AlertLifecycle.create_rule("tenant_alpha", {
+        "name": "API Transition", "dataset_id": "ds-1", "metric_id": "m-1", "owner": "tester"
+    }, "tester", store)
+
+    import uuid
+    ep_id = str(uuid.uuid4())
+    cond_id = str(uuid.uuid4())
+    store.conn.execute(
+        "INSERT INTO condition_state(tenant_id,id,rule_id,condition,started_at) VALUES (?,?,?,?,?)",
+        ("tenant_alpha", cond_id, rule["id"], "active", "2026-01-01T00:00:00Z"),
+    )
+    store.conn.execute(
+        "INSERT INTO alert_episode(tenant_id,id,rule_id,episode_identity,condition_id,"
+        "workflow_status,observed_value,started_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("tenant_alpha", ep_id, rule["id"], "api:identity", cond_id,
+         "open", 200.0, "2026-01-01T00:00:00Z"),
+    )
+    store.conn.commit()
+
+    # Valid transition
+    r = client.put(f"/v1/monitoring/episodes/{ep_id}/status", json={"status": "acknowledged"}, headers=alpha_headers)
+    assert r.status_code == 200
+    assert r.json()["episode"]["workflow_status"] == "acknowledged"
+
+    # Cross-tenant transition -> 404
+    r_cross = client.put(f"/v1/monitoring/episodes/{ep_id}/status", json={"status": "resolved"}, headers=beta_headers)
+    assert r_cross.status_code == 404

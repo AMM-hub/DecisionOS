@@ -540,17 +540,11 @@ export interface WorkflowThroughputResponse {
 }
 
 // ---- scenario studio (M4, spec §17) --------------------------------------
-export interface ScenarioTemplateSection {
-  id: string
-  title: string
-  description: string
-}
-
 export interface ScenarioTemplate {
   template_id: string
   name: string
   description: string
-  sections: ScenarioTemplateSection[]
+  sections: string[]
 }
 
 export interface ScenarioSolveResponse {
