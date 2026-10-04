@@ -113,7 +113,7 @@ def test_evidence_sampling_limits_and_not_found(app_env):
         schema_version="1.0", metric_id="m_samp", limit=200000, dimensions=["x"],
         window={"start": "2024-01-01T00:00:00Z", "end": "2024-01-31T00:00:00Z", "timezone": "UTC"}
     )
-    
+
     # Over 50,000 rows without allow_sampling -> raises EvidenceError("result_too_large")
     ts_list = [f"2024-01-01T{i//3600:02d}:{(i%3600)//60:02d}:{i%60:02d}Z" for i in range(50001)]
     df_huge = pl.DataFrame({"x": ts_list, "v": [1] * 50001})
@@ -152,7 +152,7 @@ def test_decision_freeze_prevents_evidence_binding(app_env):
         counter_metrics=[], expected_effect="deterministic"
     )
     dec = create_decision(store.conn, tenant_id, "Freeze Dec", brief, user_id)
-    
+
     # Setup mock evidence record in DB
     store.conn.execute(
         """INSERT INTO evidence_artifact (
@@ -314,5 +314,3 @@ def test_more_investigation_error_paths(app_env):
     client.post(f"/v1/investigations/{inv_id}/status", headers=headers, json={"status": "closed"})
     r_inv_trans = client.post(f"/v1/investigations/{inv_id}/status", headers=headers, json={"status": "in_progress"})
     assert r_inv_trans.status_code == 422
-
-
