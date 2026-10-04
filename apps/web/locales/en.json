@@ -44,6 +44,11 @@
     "bootstrapButton": "Bootstrap Pilot Infrastructure",
     "bootstrappedSuccess": "Pilot infrastructure successfully bootstrapped!"
   },
+  "pilotCenter": {
+    "title": "Executive Pilot Command Center",
+    "subtitle": "Support Ticket SLA & Queue Operations — Bounded Evaluation Command Center",
+    "setupLink": "Guided Pilot Setup"
+  },
   "predictiveRisk": {
     "title": "Operational Risk Queue",
     "description": "Proactive SLA breach risk scoring, model evaluation, and evidence-backed investigations.",
