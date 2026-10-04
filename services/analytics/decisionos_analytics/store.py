@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS tenant (
   name TEXT NOT NULL
 );
 
+INSERT OR IGNORE INTO tenant VALUES ('tenant_alpha', 'Northline Telecom (synthetic)');
+INSERT OR IGNORE INTO tenant VALUES ('tenant_beta', 'Harbor Retail Bank (synthetic)');
+
 CREATE TABLE IF NOT EXISTS workspace (
   tenant_id TEXT NOT NULL REFERENCES tenant(id),
   id TEXT NOT NULL,
@@ -309,6 +312,71 @@ CREATE TABLE IF NOT EXISTS decision_evidence_binding (
   UNIQUE (tenant_id, decision_id, evidence_id),
   FOREIGN KEY (tenant_id, decision_id) REFERENCES decision(tenant_id, id),
   FOREIGN KEY (tenant_id, evidence_id) REFERENCES evidence_artifact(tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS predictive_target (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  outcome_definition_json TEXT NOT NULL,
+  observation_time_semantics TEXT NOT NULL DEFAULT 'as_of',
+  outcome_window TEXT NOT NULL,
+  eligible_population TEXT NOT NULL DEFAULT 'all',
+  deadline_semantics TEXT NOT NULL,
+  time_basis TEXT NOT NULL DEFAULT 'calendar_utc',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS predictive_model (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  model_kind TEXT NOT NULL DEFAULT 'classification_risk',
+  algorithm TEXT NOT NULL,
+  feature_contract_json TEXT NOT NULL,
+  training_dataset_revision INTEGER NOT NULL,
+  training_time_range_json TEXT NOT NULL,
+  evaluation_time_range_json TEXT NOT NULL,
+  hyperparameters_json TEXT NOT NULL DEFAULT '{}',
+  calibration_method TEXT NOT NULL DEFAULT 'platt',
+  threshold_policy_json TEXT NOT NULL DEFAULT '{}',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  checksum TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  intended_use TEXT NOT NULL DEFAULT '',
+  excluded_uses TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  approved_by TEXT,
+  approved_at TEXT,
+  activated_at TEXT,
+  superseded_by TEXT,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id, target_id) REFERENCES predictive_target(tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS predictive_prediction (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  model_version INTEGER NOT NULL,
+  target_id TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  observation_time TEXT NOT NULL,
+  score REAL NOT NULL,
+  risk_tier TEXT NOT NULL,
+  threshold_used REAL NOT NULL,
+  outcome_window TEXT NOT NULL,
+  source_dataset_revision INTEGER NOT NULL,
+  feature_snapshot_json TEXT NOT NULL DEFAULT '{}',
+  suitability_status TEXT NOT NULL DEFAULT 'suitable',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id, model_id) REFERENCES predictive_model(tenant_id, id)
 );
 """
 
