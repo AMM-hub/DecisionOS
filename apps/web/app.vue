@@ -10,7 +10,9 @@ const links = [
   { to: '/forecasts', label: 'Forecasts', key: 'nav.forecasts' },
   { to: '/workflow', label: 'Workflow', key: 'nav.workflow' },
   { to: '/scenarios', label: 'Scenarios', key: 'nav.scenarios' },
-  { to: '/monitoring', label: 'Monitoring', key: 'nav.monitoring' }
+  { to: '/monitoring', label: 'Monitoring', key: 'nav.monitoring' },
+  { to: '/investigations', label: 'Investigations', key: 'nav.investigations' },
+  { to: '/decisions', label: 'Decisions', key: 'nav.decisions' }
 ]
 
 const { user, base } = useApi()

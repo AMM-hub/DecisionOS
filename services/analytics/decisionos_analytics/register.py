@@ -63,6 +63,39 @@ class CounterevidenceState(str, Enum):
     NOT_RUN = "not_run"
 
 
+class BindingRole(str, Enum):
+    PRIMARY_SUPPORT = "primary_support"
+    CONTRIBUTING = "contributing"
+    COUNTER_EVIDENCE = "counter_evidence"
+
+
+FROZEN_DECISION_STATES = {
+    DecisionStatus.ACCEPTED,
+    DecisionStatus.IMPLEMENTATION_PENDING,
+    DecisionStatus.ACTIVE,
+    DecisionStatus.REVIEW_DUE,
+    DecisionStatus.EVALUATED,
+    DecisionStatus.CLOSED,
+    DecisionStatus.SUPERSEDED,
+}
+
+
+VALID_TRANSITIONS = {
+    DecisionStatus.DRAFT: {DecisionStatus.PROPOSED, DecisionStatus.ABANDONED, DecisionStatus.DEFERRED},
+    DecisionStatus.PROPOSED: {DecisionStatus.ACCEPTED, DecisionStatus.REJECTED, DecisionStatus.DEFERRED, DecisionStatus.ABANDONED, DecisionStatus.DRAFT},
+    DecisionStatus.ACCEPTED: {DecisionStatus.IMPLEMENTATION_PENDING, DecisionStatus.ACTIVE, DecisionStatus.SUPERSEDED, DecisionStatus.ABANDONED, DecisionStatus.DEFERRED},
+    DecisionStatus.IMPLEMENTATION_PENDING: {DecisionStatus.ACTIVE, DecisionStatus.SUPERSEDED, DecisionStatus.ABANDONED},
+    DecisionStatus.ACTIVE: {DecisionStatus.REVIEW_DUE, DecisionStatus.EVALUATED, DecisionStatus.SUPERSEDED, DecisionStatus.ABANDONED},
+    DecisionStatus.REVIEW_DUE: {DecisionStatus.EVALUATED, DecisionStatus.ACTIVE, DecisionStatus.SUPERSEDED, DecisionStatus.ABANDONED},
+    DecisionStatus.EVALUATED: {DecisionStatus.CLOSED, DecisionStatus.SUPERSEDED, DecisionStatus.ABANDONED},
+    DecisionStatus.CLOSED: {DecisionStatus.SUPERSEDED},
+    DecisionStatus.REJECTED: {DecisionStatus.DRAFT, DecisionStatus.PROPOSED},
+    DecisionStatus.DEFERRED: {DecisionStatus.DRAFT, DecisionStatus.PROPOSED},
+    DecisionStatus.ABANDONED: {DecisionStatus.DRAFT},
+    DecisionStatus.SUPERSEDED: set(),
+}
+
+
 # ---------------------------------------------------------------------------
 # data models
 # ---------------------------------------------------------------------------
@@ -138,8 +171,8 @@ class DecisionRecord:
 
 DECISION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS decision (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL REFERENCES tenant(id),
+    id TEXT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     brief_json TEXT NOT NULL,
@@ -148,7 +181,8 @@ CREATE TABLE IF NOT EXISTS decision (
     outcome_json TEXT,
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_decision_tenant ON decision(tenant_id);
@@ -229,13 +263,24 @@ def list_decisions(conn, tenant_id: str, limit: int = 50, offset: int = 0) -> li
 
 
 def transition_status(
-    conn, tenant_id: str, decision_id: str, new_status: DecisionStatus,
+    conn, tenant_id: str, decision_id: str, new_status: DecisionStatus | str,
     author: str, reason: str,
 ) -> DecisionRecord:
     """Transition a decision's status and record an amendment."""
     rec = get_decision(conn, tenant_id, decision_id)
     if rec is None:
         raise LookupError(f"Decision {decision_id} not found")
+
+    if isinstance(new_status, str):
+        try:
+            new_status = DecisionStatus(new_status)
+        except ValueError:
+            raise ValueError(f"Invalid status: '{new_status}'")
+
+    current_status = rec.status
+    allowed = VALID_TRANSITIONS.get(current_status, set())
+    if new_status not in allowed:
+        raise ValueError(f"Invalid status transition from '{current_status.value}' to '{new_status.value}'")
 
     ts = now_iso()
     old_status = rec.status.value
@@ -264,6 +309,144 @@ def transition_status(
     )
     conn.commit()
     rec.status = new_status
+    rec.amendments = amendments
+    rec.updated_at = ts
+    return rec
+
+
+def bind_evidence(
+    conn,
+    tenant_id: str,
+    decision_id: str,
+    evidence_id: str,
+    binding_role: BindingRole,
+    bound_by: str,
+) -> dict[str, Any]:
+    """Bind an immutable evidence artifact to a decision. Fails if decision is frozen."""
+    rec = get_decision(conn, tenant_id, decision_id)
+    if rec is None:
+        raise LookupError(f"Decision {decision_id} not found")
+
+    if rec.status in FROZEN_DECISION_STATES:
+        raise ValueError(f"Decision {decision_id} is in status '{rec.status.value}' and context is frozen. Create an amendment to modify context.")
+
+    # Check evidence exists for tenant
+    ev_row = conn.execute(
+        "SELECT id FROM evidence_artifact WHERE tenant_id=? AND id=?",
+        (tenant_id, evidence_id),
+    ).fetchone()
+    if ev_row is None:
+        raise LookupError(f"Evidence artifact {evidence_id} not found for tenant")
+
+    # Check if duplicate binding exists
+    existing = conn.execute(
+        "SELECT * FROM decision_evidence_binding WHERE tenant_id=? AND decision_id=? AND evidence_id=?",
+        (tenant_id, decision_id, evidence_id),
+    ).fetchone()
+    if existing:
+        if existing["binding_role"] == binding_role.value:
+            return dict(existing)
+        else:
+            raise ValueError(f"Evidence {evidence_id} already bound to decision {decision_id} with role '{existing['binding_role']}'")
+
+    bind_id = new_id()
+    ts = now_iso()
+    conn.execute(
+        "INSERT INTO decision_evidence_binding(id, tenant_id, decision_id, evidence_id, binding_role, bound_by, bound_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (bind_id, tenant_id, decision_id, evidence_id, binding_role.value, bound_by, ts),
+    )
+    conn.commit()
+    return {
+        "id": bind_id,
+        "tenant_id": tenant_id,
+        "decision_id": decision_id,
+        "evidence_id": evidence_id,
+        "binding_role": binding_role.value,
+        "bound_by": bound_by,
+        "bound_at": ts,
+    }
+
+
+def list_decision_evidence(conn, tenant_id: str, decision_id: str) -> list[dict[str, Any]]:
+    """List all evidence artifacts bound to a decision."""
+    rec = get_decision(conn, tenant_id, decision_id)
+    if rec is None:
+        raise LookupError(f"Decision {decision_id} not found")
+
+    rows = conn.execute(
+        """
+        SELECT b.id, b.tenant_id, b.decision_id, b.evidence_id, b.binding_role, b.bound_by, b.bound_at,
+               e.evidence_type, e.support_status, e.canonical_digest, e.quality_flags_json, e.exactness_class, e.reproducibility_status
+        FROM decision_evidence_binding b
+        JOIN evidence_artifact e ON b.tenant_id = e.tenant_id AND b.evidence_id = e.id
+        WHERE b.tenant_id=? AND b.decision_id=?
+        ORDER BY b.bound_at ASC
+        """,
+        (tenant_id, decision_id),
+    ).fetchall()
+
+    return [
+        {
+            "id": r["id"],
+            "tenant_id": r["tenant_id"],
+            "decision_id": r["decision_id"],
+            "evidence_id": r["evidence_id"],
+            "binding_role": r["binding_role"],
+            "bound_by": r["bound_by"],
+            "bound_at": r["bound_at"],
+            "evidence": {
+                "artifact_id": r["evidence_id"],
+                "evidence_type": r["evidence_type"],
+                "support_status": r["support_status"],
+                "canonical_digest": r["canonical_digest"],
+                "quality_flags": json.loads(r["quality_flags_json"] or "[]"),
+                "exactness_class": r["exactness_class"],
+                "reproducibility_status": r["reproducibility_status"],
+            },
+        }
+        for r in rows
+    ]
+
+
+def add_amendment(
+    conn,
+    tenant_id: str,
+    decision_id: str,
+    author: str,
+    reason: str,
+    scope: str,
+    changes: dict[str, Any] | None = None,
+) -> DecisionRecord:
+    """Record an amendment on a decision."""
+    rec = get_decision(conn, tenant_id, decision_id)
+    if rec is None:
+        raise LookupError(f"Decision {decision_id} not found")
+
+    ts = now_iso()
+    amendment = DecisionAmendment(
+        version=len(rec.amendments) + 1,
+        author=author,
+        reason=reason,
+        scope=scope,
+        previous_version=len(rec.amendments),
+        created_at=ts,
+        changes=changes or {},
+    )
+    amendments = rec.amendments + [amendment]
+    amendments_json = json.dumps([
+        {
+            "version": a.version, "author": a.author, "reason": a.reason,
+            "scope": a.scope, "previous_version": a.previous_version,
+            "created_at": a.created_at, "changes": a.changes,
+        }
+        for a in amendments
+    ])
+    conn.execute(
+        "UPDATE decision SET amendments_json=?, updated_at=? WHERE tenant_id=? AND id=?",
+        (amendments_json, ts, tenant_id, decision_id),
+    )
+    conn.commit()
     rec.amendments = amendments
     rec.updated_at = ts
     return rec

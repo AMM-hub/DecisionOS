@@ -739,12 +739,11 @@ def create_app(data_dir: Path) -> FastAPI:
         ctx(x_tenant, x_user)
         body = await request.json()
         from .register import (
-            DECISION_SCHEMA, CounterevidenceCheck, CounterevidenceState,
+            CounterevidenceCheck, CounterevidenceState,
             DecisionBrief, create_decision as _create,
         )
         try:
             conn = store.conn
-            conn.executescript(DECISION_SCHEMA)
             brief = DecisionBrief(**body["brief"])
             ce = [
                 CounterevidenceCheck(hypothesis=c["hypothesis"], state=CounterevidenceState(c["state"]), detail=c.get("detail"))
@@ -760,8 +759,7 @@ def create_app(data_dir: Path) -> FastAPI:
     async def list_decisions_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
-        from .register import DECISION_SCHEMA, list_decisions as _list
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import list_decisions as _list
         recs = _list(store.conn, x_tenant)
         return [_decision_to_dict(r) for r in recs]
 
@@ -769,8 +767,7 @@ def create_app(data_dir: Path) -> FastAPI:
     async def get_decision_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
-        from .register import DECISION_SCHEMA, get_decision as _get
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import get_decision as _get
         rec = _get(store.conn, x_tenant, decision_id)
         if rec is None:
             raise HTTPException(404, "not found")  # §23.4
@@ -781,14 +778,17 @@ def create_app(data_dir: Path) -> FastAPI:
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
         body = await request.json()
-        from .register import DECISION_SCHEMA, DecisionStatus, transition_status
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import transition_status
         try:
-            rec = transition_status(store.conn, x_tenant, decision_id, DecisionStatus(body["status"]), x_user, body.get("reason", ""))
+            status_val = body.get("status", "")
+            rec = transition_status(store.conn, x_tenant, decision_id, status_val, x_user, body.get("reason", ""))
         except LookupError as e:
             raise HTTPException(404, str(e))
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+            err_msg = str(e)
+            if "Invalid status transition" in err_msg:
+                raise HTTPException(409, json.dumps({"code": "invalid_transition", "detail": err_msg}))
+            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": err_msg}))
         store.audit(x_tenant, x_user, "decision.transition", decision_id, "success", {"to_status": body["status"]})
         return _decision_to_dict(rec)
 
@@ -797,8 +797,7 @@ def create_app(data_dir: Path) -> FastAPI:
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
         body = await request.json()
-        from .register import DECISION_SCHEMA, OutcomeRecord, Verdict, record_outcome
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import OutcomeRecord, Verdict, record_outcome
         try:
             outcome = OutcomeRecord(
                 observed_results=body.get("observed_results", {}),
@@ -819,6 +818,30 @@ def create_app(data_dir: Path) -> FastAPI:
             raise HTTPException(422, json.dumps({"code": "invalid_outcome", "detail": str(e)}))
         store.audit(x_tenant, x_user, "decision.outcome", decision_id, "recorded", {"verdict": body["review_verdict"]})
         return _decision_to_dict(rec)
+
+    @app.post("/v1/decisions/{decision_id}/evidence", status_code=201)
+    async def bind_decision_evidence_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        ctx(x_tenant, x_user)
+        body = await request.json()
+        from .register import BindingRole, bind_evidence as _bind
+        try:
+            role = BindingRole(body.get("binding_role", "primary_support"))
+            res = _bind(store.conn, x_tenant, decision_id, body["evidence_id"], role, x_user)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_binding", "detail": str(e)}))
+        store.audit(x_tenant, x_user, "decision.bind_evidence", decision_id, "bound", {"evidence_id": body["evidence_id"], "role": role.value})
+        return res
+
+    @app.get("/v1/decisions/{decision_id}/evidence")
+    async def list_decision_evidence_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        ctx(x_tenant, x_user)
+        from .register import list_decision_evidence as _list_ev
+        try:
+            return _list_ev(store.conn, x_tenant, decision_id)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
 
     def _decision_to_dict(rec) -> dict:
         from .register import DecisionRecord
@@ -1042,6 +1065,168 @@ def create_app(data_dir: Path) -> FastAPI:
             if search_match(query, aliases):
                 results.append({"id": metric_id, "label": get_label(labels, locale)})
         return {"query": query, "locale": locale, "query_normalized": normalize_search(query), "results": results}
+
+    # ---- evidence artifacts (D2, spec §10, §16) ---------------------------
+    @app.post("/v1/evidence", status_code=201)
+    async def create_evidence_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .evidence import EvidenceError, EvidenceType, SupportStatus, capture_evidence
+        try:
+            investigation_id = body["investigation_id"]
+            metric_id = body["metric_id"]
+            query_params = body.get("query_params", {})
+            evidence_type = EvidenceType(body.get("evidence_type", "observed"))
+            support_status = SupportStatus(body.get("support_status", "supporting"))
+            parent_ids = body.get("parent_artifact_ids", [])
+            allow_sampling = body.get("allow_sampling", False)
+
+            req_data = dict(query_params)
+            req_data["metric_id"] = metric_id
+            req_data["schema_version"] = req_data.get("schema_version", "1.0")
+            if "window" not in req_data:
+                req_data["window"] = {"start": "2024-01-01T00:00:00Z", "end": "2024-12-31T23:59:59Z", "timezone": "UTC"}
+            elif "timezone" not in req_data["window"]:
+                req_data["window"]["timezone"] = "UTC"
+            req = MetricQueryRequest.model_validate(req_data)
+
+            pub = store.conn.execute(
+                "SELECT * FROM definition_publication WHERE tenant_id=? AND definition_id=? AND effective_to IS NULL",
+                (tenant, metric_id),
+            ).fetchone()
+            if pub is None:
+                raise HTTPException(404, "not found")  # §23.4 non-disclosing
+            content = MetricDefinitionContent.model_validate(json.loads(store.conn.execute(
+                "SELECT content FROM definition_version WHERE tenant_id=? AND definition_id=? AND version=?",
+                (tenant, metric_id, pub["version"])).fetchone()["content"]))
+            ds = store.conn.execute("SELECT * FROM dataset WHERE tenant_id=? AND id=?", (tenant, content.dataset_id)).fetchone()
+            if ds is None or ds["published_revision"] is None:
+                raise HTTPException(404, "not found")  # §23.4 non-disclosing
+            rev = store.conn.execute("SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
+                                     (tenant, ds["id"], ds["published_revision"])).fetchone()
+            manifest = json.loads(rev["manifest"])
+            frame = pl.read_parquet(io.BytesIO(objects.get_revision_object(manifest["objects"][0]["key"])))
+
+            result = capture_evidence(
+                store, objects, tenant, user, investigation_id, content, req, frame,
+                ds["published_revision"], evidence_type=evidence_type, support_status=support_status,
+                parent_artifact_ids=parent_ids, allow_sampling=allow_sampling
+            )
+            return result
+        except EvidenceError as e:
+            if e.code == "investigation_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_evidence_request", "detail": str(e)}))
+
+    @app.get("/v1/evidence/{evidence_id}")
+    async def get_evidence_api(evidence_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .evidence import EvidenceError, get_evidence
+        try:
+            return get_evidence(store, objects, tenant, evidence_id)
+        except EvidenceError as e:
+            if e.code == "evidence_not_found":
+                raise HTTPException(404, "not found")
+            return JSONResponse(status_code=409, content={"code": e.code, "detail": e.detail})
+
+    # ---- investigations (D2, spec §10, §14, §15) --------------------------
+    @app.post("/v1/investigations", status_code=201)
+    async def create_investigation_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .investigations import InvestigationError, SourceType, create_investigation
+        try:
+            st = SourceType(body.get("source_type", "ad_hoc"))
+            return create_investigation(
+                store=store, tenant_id=tenant, title=body["title"], question=body["question"],
+                owner=body.get("owner", user), user_id=user, source_type=st, source_id=body.get("source_id"),
+                analytical_state=body.get("analytical_state"), alternative_explanations=body.get("alternative_explanations")
+            )
+        except InvestigationError as e:
+            if e.code == "source_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_investigation", "detail": str(e)}))
+
+    @app.get("/v1/investigations")
+    async def list_investigations_api(
+        status: str | None = None, owner: str | None = None, source_type: str | None = None,
+        x_tenant: str = Header(default=None), x_user: str = Header(default=None)
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .investigations import list_investigations
+        return list_investigations(store, tenant, status=status, owner=owner, source_type=source_type)
+
+    @app.get("/v1/investigations/{investigation_id}")
+    async def get_investigation_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .investigations import InvestigationError, get_investigation
+        try:
+            return get_investigation(store, tenant, investigation_id)
+        except InvestigationError:
+            raise HTTPException(404, "not found")
+
+    @app.post("/v1/investigations/{investigation_id}/status")
+    async def update_investigation_status_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .investigations import InvestigationError, InvestigationStatus, update_investigation_status
+        try:
+            ns = InvestigationStatus(body["status"])
+            return update_investigation_status(store, tenant, investigation_id, ns, user)
+        except InvestigationError as e:
+            if e.code == "investigation_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+
+    @app.post("/v1/investigations/{investigation_id}/claims", status_code=201)
+    async def add_claim_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .evidence import EvidenceType, SupportStatus
+        from .investigations import InvestigationError, add_claim
+        try:
+            et = EvidenceType(body.get("evidence_type", "observed"))
+            ss = SupportStatus(body.get("support_status", "supporting"))
+            return add_claim(
+                store=store, tenant_id=tenant, investigation_id=investigation_id, statement=body["statement"],
+                user_id=user, evidence_type=et, support_status=ss, quality_flags=body.get("quality_flags"),
+                structured_fact=body.get("structured_fact"), evidence_id=body.get("evidence_id")
+            )
+        except InvestigationError as e:
+            if e.code in ("investigation_not_found", "evidence_not_found"):
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_claim", "detail": str(e)}))
+
+    @app.get("/v1/investigations/{investigation_id}/claims")
+    async def list_claims_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .investigations import InvestigationError, get_investigation
+        try:
+            inv = get_investigation(store, tenant, investigation_id)
+            return inv["claims"]
+        except InvestigationError:
+            raise HTTPException(404, "not found")
+
+    @app.post("/v1/monitoring/episodes/{episode_id}/investigate")
+    async def episode_investigate_api(episode_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        from .investigations import InvestigationError, investigate_episode
+        try:
+            inv, created = investigate_episode(store, tenant, episode_id, user)
+            status_code = 201 if created else 200
+            return JSONResponse(status_code=status_code, content=inv)
+        except InvestigationError as e:
+            if e.code == "episode_not_found":
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
 
     app.state.store = store
     app.state.objects = objects

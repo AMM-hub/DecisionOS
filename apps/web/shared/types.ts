@@ -666,3 +666,154 @@ export interface MonitoringAlertEpisode {
 export interface MonitoringEpisodeListResponse {
   episodes: MonitoringAlertEpisode[]
 }
+
+// ---- investigations & evidence (D2, spec §10, §19) -----------------------
+export type InvestigationStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
+export type SourceType = 'monitoring_episode' | 'workflow_bottleneck' | 'ad_hoc'
+export type EvidenceType = 'observed' | 'estimated' | 'simulated' | 'causal_estimate' | 'hypothesis'
+export type SupportStatus = 'supporting' | 'counter' | 'neutral' | 'unverified'
+export type ExactnessClass = 'exact' | 'numerically_equivalent' | 'stochastically_reproducible' | 'presentation_reproducible'
+export type ReproducibilityStatus = 'reproducible' | 'partially_reproducible' | 'unavailable_after_erasure'
+export type BindingRole = 'primary_support' | 'contributing' | 'counter_evidence'
+
+export interface StructuredFact {
+  metric_id: string
+  value: unknown
+  unit?: string
+  segment?: Record<string, unknown>
+  period?: string
+  comparison?: string | null
+  lineage?: Record<string, unknown>
+}
+
+export interface EvidenceArtifact {
+  artifact_id: string
+  tenant_id: string
+  investigation_id: string
+  parent_artifact_ids: string[]
+  evidence_type: EvidenceType
+  support_status: SupportStatus
+  quality_flags: string[]
+  metric_id: string
+  definition_version: number
+  dataset_id: string
+  dataset_revision: number
+  resolved_plan: Record<string, unknown>
+  query_params: Record<string, unknown>
+  canonical_digest: string
+  storage_format: 'json' | 'parquet'
+  payload_json?: string | null
+  parquet_key?: string | null
+  row_count: number
+  exactness_class: ExactnessClass
+  reproducibility_status: ReproducibilityStatus
+  created_by: string
+  created_at: string
+}
+
+export interface InvestigationClaim {
+  id: string
+  tenant_id: string
+  investigation_id: string
+  evidence_id?: string | null
+  statement: string
+  evidence_type: EvidenceType
+  support_status: SupportStatus
+  quality_flags: string[]
+  structured_fact: StructuredFact
+  created_by: string
+  created_at: string
+}
+
+export interface Investigation {
+  id: string
+  tenant_id: string
+  title: string
+  question: string
+  source_type: SourceType
+  source_id?: string | null
+  status: InvestigationStatus
+  owner: string
+  analytical_state: Record<string, unknown>
+  alternative_explanations: string[]
+  created_by: string
+  created_at: string
+  updated_at: string
+  claims?: InvestigationClaim[]
+  evidence?: EvidenceArtifact[]
+}
+
+export type DecisionStatus =
+  | 'draft' | 'proposed' | 'accepted' | 'implementation_pending'
+  | 'active' | 'review_due' | 'evaluated' | 'closed'
+  | 'rejected' | 'deferred' | 'abandoned' | 'superseded'
+
+export interface DecisionBrief {
+  problem: string
+  relevant_findings: string[]
+  proposed_action: string
+  baseline_option: string
+  scope: string
+  owner: string
+  trade_offs: string[]
+  assumptions: string[]
+  evidence_coverage: string[]
+  validation_plan: string
+  counter_metrics: string[]
+  expected_effect: 'unknown' | 'deterministic' | 'estimated' | 'simulated'
+}
+
+export interface CounterevidenceCheck {
+  hypothesis: string
+  state: 'detected' | 'not_detected' | 'not_testable' | 'not_run'
+  detail?: string | null
+}
+
+export interface DecisionAmendment {
+  version: number
+  author: string
+  reason: string
+  scope: string
+  previous_version: number
+  created_at: string
+  changes?: Record<string, unknown> | null
+}
+
+export interface OutcomeRecord {
+  observed_results: Record<string, unknown>
+  pinned_definition_version?: number | null
+  data_revision?: number | null
+  measurement_window: string
+  expectation: string
+  estimated_effect?: Record<string, unknown> | null
+  study_run?: string | null
+  data_quality_caveats: string[]
+  review_verdict: 'supported_improvement' | 'no_clear_change' | 'deterioration' | 'inconclusive' | 'not_evaluable'
+  verdict_evidence: string
+}
+
+export interface DecisionEvidenceBinding {
+  id: string
+  tenant_id: string
+  decision_id: string
+  evidence_id: string
+  binding_role: BindingRole
+  bound_by: string
+  bound_at: string
+  evidence?: Partial<EvidenceArtifact>
+}
+
+export interface DecisionRecord {
+  id: string
+  tenant_id: string
+  title: string
+  status: DecisionStatus
+  brief: DecisionBrief
+  counterevidence: CounterevidenceCheck[]
+  amendments: DecisionAmendment[]
+  outcome?: OutcomeRecord | null
+  created_by: string
+  created_at: string
+  updated_at: string
+  evidence_bindings?: DecisionEvidenceBinding[]
+}

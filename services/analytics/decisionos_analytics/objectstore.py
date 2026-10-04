@@ -53,6 +53,18 @@ class LocalObjectStore:
     def get_revision_object(self, key: str) -> bytes:
         return self._safe(key).read_bytes()
 
+    def put_evidence_object(self, tenant_id: str, artifact_id: str, data: bytes) -> dict:
+        key = f"evidence/{tenant_id}/{artifact_id}.parquet"
+        target = self._safe(key)
+        if target.exists():
+            raise FileExistsError("evidence objects are immutable")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return {"key": key, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+
+    def get_evidence_object(self, key: str) -> bytes:
+        return self._safe(key).read_bytes()
+
     def delete_quarantine(self, key: str) -> None:
         p = self._safe(f"quarantine/{key}")
         p.unlink(missing_ok=True)
