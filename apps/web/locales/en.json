@@ -29,7 +29,20 @@
     "investigations": "Investigations",
     "decisions": "Decisions",
     "risk": "Operational Risk",
+    "pilot": "Pilot Setup",
+    "pilotDashboard": "Pilot Center",
     "language": "Language"
+  },
+  "pilotSetup": {
+    "title": "Guided Operational Pilot Setup",
+    "description": "Configure pilot contracts, dataset readiness, semantic metrics, and monitoring loops in one guided wizard.",
+    "contractStep": "1. Pilot Contract",
+    "dataStep": "2. Data Readiness",
+    "semanticStep": "3. Semantic Pack",
+    "monitoringStep": "4. Monitoring & Risk",
+    "summaryStep": "5. Readiness Summary",
+    "bootstrapButton": "Bootstrap Pilot Infrastructure",
+    "bootstrappedSuccess": "Pilot infrastructure successfully bootstrapped!"
   },
   "predictiveRisk": {
     "title": "Operational Risk Queue",

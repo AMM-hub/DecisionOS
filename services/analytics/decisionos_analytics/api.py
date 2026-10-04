@@ -1676,6 +1676,61 @@ def create_app(data_dir: Path) -> FastAPI:
             }
         }
 
+    @app.post("/v1/pilots/bootstrap", status_code=201)
+    async def bootstrap_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import create_pilot, update_pilot_status, PilotStatus
+        from .predictive import create_predictive_target, register_predictive_model
+
+        # 1. Create Pilot
+        pilot = create_pilot(
+            store=store,
+            tenant_id=tenant,
+            name=body.get("name", "Golden Support Operations Pilot"),
+            owner=body.get("owner", user),
+            domain=body.get("domain", "support_ticket_operations"),
+            dataset_id=body.get("dataset_id"),
+            dataset_revision=body.get("dataset_revision", 1),
+            user_id=user,
+        )
+
+        # 2. Seed predictive risk target and model
+        tgt_name = f"SLA Breach 24h ({pilot['id']})"
+        tgt = create_predictive_target(
+            store=store,
+            tenant_id=tenant,
+            name=tgt_name,
+            entity_type="workflow_case",
+            outcome_definition={"metric": "duration_hours", "condition": "gt", "threshold": 24.0},
+            outcome_window="24h",
+            deadline_semantics="fixed",
+            user_id=user,
+        )
+
+        mod = register_predictive_model(
+            store=store,
+            tenant_id=tenant,
+            target_id=tgt["id"],
+            algorithm="LogisticRegression",
+            feature_contract_specs=[{"feature_id": "case_age_hours"}],
+            training_dataset_revision=body.get("dataset_revision", 1),
+            training_time_range={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
+            evaluation_time_range={"start": "2026-02-01T00:00:00Z", "end": "2026-02-15T00:00:00Z"},
+            user_id=user,
+        )
+
+        # Update status to ready_for_evaluation
+        update_pilot_status(store, tenant, pilot["id"], PilotStatus.CONFIGURATION, user)
+        updated_pilot = update_pilot_status(store, tenant, pilot["id"], PilotStatus.READY_FOR_EVALUATION, user)
+
+        return {
+            "pilot": updated_pilot,
+            "target": tgt,
+            "model": mod,
+            "status": "bootstrapped",
+        }
+
     app.state.store = store
     app.state.objects = objects
     return app
