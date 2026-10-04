@@ -16,10 +16,10 @@ series at predict time), so they persist in the SQLite control store and
 travel through the API without pickles.
 """
 
-from __future__ import annotations
-
+import json
 import math
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,7 @@ import polars as pl
 from statsforecast import StatsForecast
 from statsforecast.models import AutoARIMA, AutoETS, AutoTheta, Naive, SeasonalNaive
 
+from .evidence import compute_canonical_digest
 from .execution import _parse_ts, _pred
 from .semantics import (
     CountExpression,
@@ -34,6 +35,7 @@ from .semantics import (
     MetricDefinitionContent,
     RatioExpression,
 )
+from .store import Store, new_id, now_iso
 
 MIN_PERIODS = 12  # §16.4: refuse below this
 BASELINE_MODELS = ("Naive", "SeasonalNaive")
@@ -225,6 +227,7 @@ def _make_model(name: str, season_length: int):
 
 def _metrics(actual: np.ndarray, pred: np.ndarray, train_y: np.ndarray, m: int) -> dict:
     err = actual - pred
+    mae = float(np.mean(np.abs(err))) if err.size else None
     rmse = math.sqrt(float(np.mean(err**2))) if err.size else None
     nz = actual != 0
     mape = float(np.mean(np.abs(err[nz] / actual[nz])) * 100) if nz.any() else None
@@ -232,8 +235,50 @@ def _metrics(actual: np.ndarray, pred: np.ndarray, train_y: np.ndarray, m: int) 
     if m > 1 and train_y.size > m:
         diffs = np.abs(train_y[m:] - train_y[:-m])
     scale = float(np.mean(diffs)) if diffs.size else 0.0
+    # MASE denominator must be derived ONLY from fold training data.
+    # If scale == 0: mase = None (undefined). Never return 0 or infinity.
     mase = float(np.mean(np.abs(err)) / scale) if scale > 0 else None
-    return {"mape": _r(mape), "mase": _r(mase), "rmse": _r(rmse)}
+    return {"mae": _r(mae), "mape": _r(mape), "mase": _r(mase), "rmse": _r(rmse)}
+
+
+def pinball_loss(actual: np.ndarray, pred_q: np.ndarray, q: float) -> float | None:
+    """Calculate quantile loss (pinball loss) for quantile q in (0, 1)."""
+    if actual.size == 0 or pred_q.size == 0 or np.isnan(pred_q).all():
+        return None
+    err = actual - pred_q
+    loss = np.maximum(q * err, (q - 1.0) * err)
+    return _r(float(np.mean(loss)))
+
+
+def validate_forecast_intervals(
+    yhat: np.ndarray,
+    lo95: np.ndarray,
+    hi95: np.ndarray,
+    lo80: np.ndarray | None = None,
+    hi80: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Validate prediction intervals: lower <= point <= upper and quantile nesting (lo95 <= lo80 <= yhat <= hi80 <= hi95)."""
+    valid_bounds = True
+    valid_nesting = True
+
+    if not (np.all(np.isnan(lo95) | (lo95 <= yhat + 1e-9)) and np.all(np.isnan(hi95) | (yhat <= hi95 + 1e-9))):
+        valid_bounds = False
+
+    if lo80 is not None and hi80 is not None:
+        cond = (
+            np.all(np.isnan(lo95) | np.isnan(lo80) | (lo95 <= lo80 + 1e-9))
+            and np.all(np.isnan(lo80) | (lo80 <= yhat + 1e-9))
+            and np.all(np.isnan(hi80) | (yhat <= hi80 + 1e-9))
+            and np.all(np.isnan(hi80) | np.isnan(hi95) | (hi80 <= hi95 + 1e-9))
+        )
+        if not cond:
+            valid_nesting = False
+
+    return {
+        "valid_bounds": valid_bounds,
+        "valid_nesting": valid_nesting,
+        "valid": valid_bounds and valid_nesting,
+    }
 
 
 def _r(v: float | None) -> float | None:
@@ -248,6 +293,176 @@ def _fit_predict(train: pl.DataFrame, name: str, m: int, frequency: str, h: int)
     return np.asarray(pd.to_numeric(col, errors="coerce").to_numpy(), dtype=float)
 
 
+def _fit_predict_with_intervals(
+    train: pl.DataFrame, name: str, m: int, frequency: str, h: int
+) -> dict[str, np.ndarray]:
+    sf = StatsForecast([_make_model(name, m)], freq=FREQ_PANDAS[frequency], n_jobs=1)
+    sf.fit(_to_pandas(train))
+    out = sf.predict(h=h, level=[80, 95])
+    yhat = pd.to_numeric(out[name], errors="coerce").to_numpy(dtype=float)
+    lo95 = pd.to_numeric(out.get(f"{name}-lo-95", np.nan), errors="coerce").to_numpy(dtype=float) if f"{name}-lo-95" in out.columns else np.full(h, np.nan)
+    hi95 = pd.to_numeric(out.get(f"{name}-hi-95", np.nan), errors="coerce").to_numpy(dtype=float) if f"{name}-hi-95" in out.columns else np.full(h, np.nan)
+    lo80 = pd.to_numeric(out.get(f"{name}-lo-80", np.nan), errors="coerce").to_numpy(dtype=float) if f"{name}-lo-80" in out.columns else np.full(h, np.nan)
+    hi80 = pd.to_numeric(out.get(f"{name}-hi-80", np.nan), errors="coerce").to_numpy(dtype=float) if f"{name}-hi-80" in out.columns else np.full(h, np.nan)
+    return {
+        "yhat": yhat,
+        "lo95": lo95,
+        "hi95": hi95,
+        "lo80": lo80,
+        "hi80": hi80,
+    }
+
+
+def rolling_origin_evaluate(
+    data: pl.DataFrame,
+    horizon: int = 1,
+    n_folds: int = 3,
+    min_train_size: int = MIN_PERIODS,
+    frequency: str = "D",
+    season_length: int | None = None,
+    models: tuple[str, ...] = CANDIDATE_MODELS,
+    time_col: str = "ds",
+    value_col: str = "y",
+) -> dict:
+    """Temporal rolling-origin evaluation preserving fold training scale, interval validation,
+    quantile loss, and relative MAE comparison against selected baseline.
+    """
+    df = _as_frame(data, time_col, value_col)
+    n = df.height
+
+    max_folds = max(1, (n - min_train_size) // horizon)
+    actual_folds = min(n_folds, max_folds)
+    if actual_folds < 1 or n < min_train_size + horizon:
+        raise ForecastRefused(
+            f"rolling origin evaluation requires at least {min_train_size + horizon} periods for horizon {horizon}; found {n}",
+            missing=[f"{min_train_size + horizon - n} more periods"],
+            actions=["increase series history or reduce horizon/min_train_size"],
+        )
+
+    m = _effective_season(season_length, frequency, min_train_size)
+
+    model_fold_results: dict[str, list[dict]] = {name: [] for name in models}
+
+    for fold_idx in range(actual_folds):
+        train_end = n - (actual_folds - fold_idx) * horizon
+        train_df = df.head(train_end)
+        test_df = df.slice(train_end, horizon)
+        actual_y = test_df["y"].to_numpy()
+        train_y = train_df["y"].to_numpy()
+
+        for name in models:
+            try:
+                fit_res = _fit_predict_with_intervals(train_df, name, m, frequency, horizon)
+                yhat = fit_res["yhat"]
+                lo95 = fit_res["lo95"]
+                hi95 = fit_res["hi95"]
+                lo80 = fit_res["lo80"]
+                hi80 = fit_res["hi80"]
+
+                metrics = _metrics(actual_y, yhat, train_y, m)
+
+                cov95 = float(np.mean((lo95 <= actual_y) & (actual_y <= hi95))) if not np.isnan(lo95).all() else None
+                cov80 = float(np.mean((lo80 <= actual_y) & (actual_y <= hi80))) if not np.isnan(lo80).all() else None
+
+                interval_val = validate_forecast_intervals(yhat, lo95, hi95, lo80, hi80)
+
+                model_fold_results[name].append({
+                    "fold": fold_idx,
+                    "train_size": train_end,
+                    "horizon": horizon,
+                    "mae": metrics["mae"],
+                    "mase": metrics["mase"],
+                    "rmse": metrics["rmse"],
+                    "mape": metrics["mape"],
+                    "coverage_95": _r(cov95),
+                    "coverage_80": _r(cov80),
+                    "valid_nesting": interval_val["valid_nesting"],
+                    "valid_bounds": interval_val["valid_bounds"],
+                    "quantile_loss": {
+                        "q025": pinball_loss(actual_y, lo95, 0.025),
+                        "q10": pinball_loss(actual_y, lo80, 0.10),
+                        "q90": pinball_loss(actual_y, hi80, 0.90),
+                        "q975": pinball_loss(actual_y, hi95, 0.975),
+                    },
+                })
+            except Exception as e:
+                model_fold_results[name].append({
+                    "fold": fold_idx,
+                    "train_size": train_end,
+                    "horizon": horizon,
+                    "error": str(e),
+                })
+
+    aggregated_comparisons = []
+    baseline_maes: dict[str, float] = {}
+
+    for b_name in BASELINE_MODELS:
+        folds = [f for f in model_fold_results.get(b_name, []) if "mae" in f and f["mae"] is not None]
+        if folds:
+            baseline_maes[b_name] = float(np.mean([f["mae"] for f in folds]))
+
+    ref_baseline_name = "Naive" if "Naive" in baseline_maes else (list(baseline_maes.keys())[0] if baseline_maes else None)
+    ref_baseline_mae = baseline_maes.get(ref_baseline_name) if ref_baseline_name else None
+
+    for name in models:
+        folds = [f for f in model_fold_results[name] if "mae" in f and f["mae"] is not None]
+        if not folds:
+            aggregated_comparisons.append({
+                "model_name": name,
+                "mae": None,
+                "mase": None,
+                "rmse": None,
+                "mape": None,
+                "relative_mae": None,
+                "empirical_coverage_95": None,
+                "empirical_coverage_80": None,
+                "error": "fit_failed",
+            })
+            continue
+
+        mean_mae = float(np.mean([f["mae"] for f in folds]))
+        mases = [f["mase"] for f in folds if f["mase"] is not None]
+        mean_mase = float(np.mean(mases)) if mases else None
+        rmses = [f["rmse"] for f in folds if f["rmse"] is not None]
+        mean_rmse = float(np.mean(rmses)) if rmses else None
+        mapes = [f["mape"] for f in folds if f["mape"] is not None]
+        mean_mape = float(np.mean(mapes)) if mapes else None
+
+        cov95s = [f["coverage_95"] for f in folds if f["coverage_95"] is not None]
+        mean_cov95 = float(np.mean(cov95s)) if cov95s else None
+
+        cov80s = [f["coverage_80"] for f in folds if f["coverage_80"] is not None]
+        mean_cov80 = float(np.mean(cov80s)) if cov80s else None
+
+        rel_mae = (mean_mae / ref_baseline_mae) if (ref_baseline_mae and ref_baseline_mae > 0) else 1.0
+
+        aggregated_comparisons.append({
+            "model_name": name,
+            "mae": _r(mean_mae),
+            "mase": _r(mean_mase),
+            "rmse": _r(mean_rmse),
+            "mape": _r(mean_mape),
+            "relative_mae": _r(rel_mae),
+            "empirical_coverage_95": _r(mean_cov95),
+            "empirical_coverage_80": _r(mean_cov80),
+            "fold_count": len(folds),
+            "error": None,
+        })
+
+    aggregated_comparisons.sort(key=lambda c: (c["mase"] is None, c["mase"] if c["mase"] is not None else 0.0))
+
+    return {
+        "comparisons": aggregated_comparisons,
+        "fold_details": model_fold_results,
+        "fold_count": actual_folds,
+        "sample_size": n,
+        "horizon": horizon,
+        "season_length": m,
+        "frequency": frequency,
+        "baseline_model": ref_baseline_name,
+    }
+
+
 def evaluate(
     data: pl.DataFrame,
     test_size: float = 0.2,
@@ -256,8 +471,23 @@ def evaluate(
     models: tuple[str, ...] = CANDIDATE_MODELS,
     time_col: str = "ds",
     value_col: str = "y",
+    use_rolling_origin: bool = False,
+    n_folds: int = 3,
 ) -> dict:
     """Compare candidate models on a historical holdout (§16 workflow 3)."""
+    if use_rolling_origin:
+        return rolling_origin_evaluate(
+            data=data,
+            horizon=max(1, int(round(data.height * test_size))),
+            n_folds=n_folds,
+            min_train_size=MIN_PERIODS,
+            frequency=frequency,
+            season_length=season_length,
+            models=models,
+            time_col=time_col,
+            value_col=value_col,
+        )
+
     df = _as_frame(data, time_col, value_col)
     n = df.height
     if n < MIN_PERIODS:
@@ -271,13 +501,24 @@ def evaluate(
     m = _effective_season(season_length, frequency, train.height)
 
     comparisons = []
+    baseline_maes: dict[str, float] = {}
+
     for name in models:
         try:
             pred = _fit_predict(train, name, m, frequency, holdout)
         except Exception:  # a candidate failing to converge is reported, not fatal
-            comparisons.append({"model_name": name, "mape": None, "mase": None, "rmse": None, "error": "fit_failed"})
+            comparisons.append({"model_name": name, "mae": None, "mape": None, "mase": None, "rmse": None, "relative_mae": None, "error": "fit_failed"})
             continue
-        comparisons.append({"model_name": name, **_metrics(test["y"].to_numpy(), pred, train["y"].to_numpy(), m)})
+        res = _metrics(test["y"].to_numpy(), pred, train["y"].to_numpy(), m)
+        if name in BASELINE_MODELS and res["mae"] is not None:
+            baseline_maes[name] = res["mae"]
+        comparisons.append({"model_name": name, "error": None, **res})
+
+    ref_baseline = baseline_maes.get("Naive") or (list(baseline_maes.values())[0] if baseline_maes else None)
+    for c in comparisons:
+        if c.get("mae") is not None and ref_baseline and ref_baseline > 0:
+            c["relative_mae"] = _r(c["mae"] / ref_baseline)
+
     comparisons.sort(key=lambda c: (c["mase"] is None, c["mase"] if c["mase"] is not None else 0.0))
     return {
         "comparisons": comparisons,
@@ -286,6 +527,94 @@ def evaluate(
         "season_length": m,
         "frequency": frequency,
         "baseline_model": _baseline_winner(comparisons),
+    }
+
+
+def capture_forecast_evidence(
+    store: Store,
+    tenant_id: str,
+    user_id: str,
+    investigation_id: str,
+    metric_id: str,
+    dataset_id: str,
+    dataset_revision: int,
+    model_spec: dict,
+    eval_metrics: dict,
+    forecast_df: pl.DataFrame,
+    support_status: str = "supporting",
+) -> dict:
+    """Capture forecast evaluation and predictions as an immutable D2 evidence artifact (evidence_type = 'estimated')."""
+    inv = store.conn.execute(
+        "SELECT id FROM investigation WHERE tenant_id=? AND id=?",
+        (tenant_id, investigation_id),
+    ).fetchone()
+    if inv is None:
+        raise ForecastRefused("investigation_not_found", actions=["create investigation before capturing forecast evidence"])
+
+    rows = forecast_df.to_dicts()
+    digest_payload = {
+        "metric_id": metric_id,
+        "dataset_id": dataset_id,
+        "dataset_revision": dataset_revision,
+        "model_name": model_spec.get("model_name"),
+        "params": model_spec.get("params"),
+        "eval_metrics": eval_metrics,
+        "forecast_rows": rows,
+    }
+
+    digest = compute_canonical_digest(digest_payload)
+    artifact_id = f"ev-{new_id()[:12]}"
+    created_at = now_iso()
+
+    quality_flags = ["estimated_forecast"]
+    if eval_metrics.get("mase") is None:
+        quality_flags.append("undefined_mase_scale")
+
+    payload_json = json.dumps({
+        "model_spec": model_spec,
+        "evaluation_metrics": eval_metrics,
+        "forecast": rows,
+    })
+
+    store.conn.execute(
+        """INSERT INTO evidence_artifact(
+            tenant_id, id, investigation_id, parent_artifact_ids_json, evidence_type, support_status,
+            quality_flags_json, metric_id, definition_version, dataset_id, dataset_revision,
+            resolved_plan_json, query_params_json, canonical_digest, storage_format, payload_json,
+            parquet_key, row_count, exactness_class, reproducibility_status, created_by, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            tenant_id,
+            artifact_id,
+            investigation_id,
+            json.dumps([]),
+            "estimated",
+            support_status,
+            json.dumps(quality_flags),
+            metric_id,
+            1,
+            dataset_id,
+            dataset_revision,
+            json.dumps({"type": "forecast", "model": model_spec.get("model_name")}),
+            json.dumps({"horizon": model_spec.get("horizon")}),
+            digest,
+            "json",
+            payload_json,
+            None,
+            len(rows),
+            "stochastically_reproducible",
+            "reproducible",
+            user_id,
+            created_at,
+        ),
+    )
+    store.conn.commit()
+
+    return {
+        "artifact_id": artifact_id,
+        "evidence_type": "estimated",
+        "digest": digest,
+        "created_at": created_at,
     }
 
 
