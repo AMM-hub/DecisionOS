@@ -126,3 +126,58 @@ def test_classification_metrics_report():
     assert metrics["recall"] == 1.0
     assert metrics["confusion_matrix"]["tp"] == 4
     assert metrics["confusion_matrix"]["fp"] == 0
+
+
+def test_threshold_policy_precision_recall_fixed():
+    """Verify precision, recall, and fixed threshold policies."""
+    y_true = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    scores = np.array([0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9])
+
+    p_res = determine_operating_threshold(scores, y_true=y_true, policy_type="precision", policy_params={"target_precision": 0.75})
+    assert p_res["policy_type"] == "precision"
+    assert p_res["threshold"] > 0.0
+
+    r_res = determine_operating_threshold(scores, y_true=y_true, policy_type="recall", policy_params={"target_recall": 0.50})
+    assert r_res["policy_type"] == "recall"
+    assert r_res["threshold"] > 0.0
+
+    f_res = determine_operating_threshold(scores, policy_type="fixed", policy_params={"fixed_threshold": 0.65})
+    assert f_res["policy_type"] == "fixed"
+    assert f_res["threshold"] == 0.65
+
+
+def test_parse_duration_and_case_exclusion():
+    """Verify duration parser and excluded case states."""
+    from decisionos_analytics.risk import parse_duration_to_seconds, evaluate_case_state, CaseState, assess_risk_suitability
+
+    assert parse_duration_to_seconds("7d") == 7 * 86400.0
+    assert parse_duration_to_seconds("60m") == 3600.0
+    assert parse_duration_to_seconds("1800s") == 1800.0
+    assert parse_duration_to_seconds("120") == 120.0
+
+    with pytest.raises(ValueError):
+        parse_duration_to_seconds("invalid_unit")
+
+    # Excluded status
+    st, reas = evaluate_case_state("c1", "2024-01-01T10:00:00Z", None, current_status="completed")
+    assert st == CaseState.EXCLUDED
+    assert "completed" in reas
+
+    # Suitability checks
+    import polars as pl
+    from decisionos_analytics.predictive import RiskTargetSpec
+    target = RiskTargetSpec("t1", "tenant_alpha", "Target 1", "workflow_case", {}, "24h", "fixed")
+
+    df_empty = pl.DataFrame()
+    s1 = assess_risk_suitability(df_empty, target)
+    assert s1["status"] == "insufficient_history"
+
+    df_small = pl.DataFrame({"label": [0, 0, 1]})
+    s2 = assess_risk_suitability(df_small, target, policy_config={"min_sample_size": 10, "min_positive_events": 2})
+    assert s2["suitable"] is False
+
+    df_good = pl.DataFrame({"label": [0, 0, 0, 0, 1, 1, 1, 1, 1, 1]})
+    s3 = assess_risk_suitability(df_good, target, policy_config={"min_sample_size": 5, "min_positive_events": 2})
+    assert s3["status"] == "suitable"
+    assert s3["suitable"] is True
+
