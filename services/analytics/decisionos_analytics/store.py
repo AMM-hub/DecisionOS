@@ -378,6 +378,26 @@ CREATE TABLE IF NOT EXISTS predictive_prediction (
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, model_id) REFERENCES predictive_model(tenant_id, id)
 );
+
+CREATE TABLE IF NOT EXISTS pilot (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  domain TEXT NOT NULL DEFAULT 'support_ticket_operations',
+  owner TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  dataset_id TEXT,
+  dataset_revision INTEGER,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  time_basis TEXT NOT NULL DEFAULT 'calendar_utc',
+  started_at TEXT,
+  target_end_at TEXT,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
 """
 
 

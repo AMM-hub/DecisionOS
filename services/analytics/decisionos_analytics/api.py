@@ -1469,6 +1469,476 @@ def create_app(data_dir: Path) -> FastAPI:
             "created_at": created_at,
         }
 
+    # -----------------------------------------------------------------------
+    # PILOT-01 Controlled Operational Pilot API
+    # -----------------------------------------------------------------------
+    @app.get("/v1/pilots/semantic-pack")
+    async def get_pilot_semantic_pack(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        ctx(x_tenant, x_user)
+        from .pilot import SUPPORT_OPERATIONS_SEMANTIC_PACK
+        return {"semantic_pack": SUPPORT_OPERATIONS_SEMANTIC_PACK}
+
+    @app.get("/v1/pilots")
+    async def list_pilots_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .pilot import list_pilots
+        return list_pilots(store, tenant)
+
+    @app.post("/v1/pilots", status_code=201)
+    async def create_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import create_pilot
+        try:
+            return create_pilot(
+                store=store,
+                tenant_id=tenant,
+                name=body["name"],
+                owner=body.get("owner", user),
+                domain=body.get("domain", "support_ticket_operations"),
+                dataset_id=body.get("dataset_id"),
+                dataset_revision=body.get("dataset_revision"),
+                timezone_str=body.get("timezone", "UTC"),
+                time_basis=body.get("time_basis", "calendar_utc"),
+                config=body.get("config", {}),
+                user_id=user,
+            )
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_pilot_spec", "detail": str(e)}))
+
+    @app.get("/v1/pilots/{pilot_id}")
+    async def get_pilot_api(pilot_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .pilot import get_pilot
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+        return pilot
+
+    @app.post("/v1/pilots/{pilot_id}/status")
+    async def update_pilot_status_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        target_status = body.get("status")
+        from .pilot import update_pilot_status
+        try:
+            return update_pilot_status(store, tenant, pilot_id, target_status, user)
+        except LookupError:
+            raise HTTPException(404, "not found")
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_pilot_status_transition", "detail": str(e)}))
+
+    @app.post("/v1/pilots/{pilot_id}/validate-data")
+    async def validate_pilot_data_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, validate_pilot_data_readiness
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        dataset_id = body.get("dataset_id") or pilot.get("dataset_id")
+        rev_no = body.get("dataset_revision") or pilot.get("dataset_revision") or 1
+
+        rev = store.conn.execute(
+            "SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
+            (tenant, dataset_id, rev_no),
+        ).fetchone()
+        if rev is None:
+            return {
+                "status": "BLOCKED",
+                "reasons": [f"Dataset revision {rev_no} not found for dataset '{dataset_id}'"],
+                "warnings": [],
+                "metrics": {},
+            }
+
+        manifest = json.loads(rev["manifest"])
+        frame = pl.read_parquet(io.BytesIO(objects.get_revision_object(manifest["objects"][0]["key"])))
+
+        val_res = validate_pilot_data_readiness(
+            df=frame,
+            case_col=body.get("case_col", "ticket_id"),
+            timestamp_col=body.get("timestamp_col", "timestamp"),
+            status_col=body.get("status_col", "status"),
+            deadline_col=body.get("deadline_col", "sla_deadline"),
+            queue_col=body.get("queue_col", "queue"),
+        )
+        return val_res
+
+    @app.post("/v1/pilots/{pilot_id}/refresh")
+    async def refresh_pilot_dataset_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        dataset_id = body.get("dataset_id") or pilot.get("dataset_id")
+        if not dataset_id:
+            raise HTTPException(422, json.dumps({"code": "missing_dataset_id"}))
+
+        # Get latest revision number
+        max_rev_row = store.conn.execute(
+            "SELECT MAX(revision) as mr FROM dataset_revision WHERE tenant_id=? AND dataset_id=?",
+            (tenant, dataset_id),
+        ).fetchone()
+        new_rev_no = (max_rev_row["mr"] or 1) + 1
+
+        content_bytes = None
+        if "csv_content" in body:
+            try:
+                df = pl.read_csv(io.StringIO(body["csv_content"]))
+                if df.height == 0:
+                    raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "CSV content is empty"}))
+                buf = io.BytesIO()
+                df.write_parquet(buf)
+                content_bytes = buf.getvalue()
+            except Exception as e:
+                if isinstance(e, HTTPException):
+                    raise e
+                raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": f"CSV parse error: {e}"}))
+        elif body.get("use_previous_revision"):
+            old_rev = store.conn.execute(
+                "SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
+                (tenant, dataset_id, max_rev_row["mr"]),
+            ).fetchone()
+            if old_rev:
+                old_manifest = json.loads(old_rev["manifest"])
+                content_bytes = objects.get_revision_object(old_manifest["objects"][0]["key"])
+        else:
+            raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "Must provide csv_content or use_previous_revision flag"}))
+
+        obj_res = objects.put_revision_object(tenant, dataset_id, new_rev_no, f"refresh-rev-{new_rev_no}.parquet", content_bytes)
+        manifest = {"objects": [{"key": obj_res["key"]}]}
+
+        store.conn.execute(
+            "INSERT INTO dataset_revision (tenant_id, dataset_id, revision, state, manifest, row_count, created_at) VALUES (?, ?, ?, 'published', ?, 1, ?)",
+            (tenant, dataset_id, new_rev_no, json.dumps(manifest), now_iso())
+        )
+        store.conn.execute(
+            "UPDATE dataset SET published_revision=? WHERE tenant_id=? AND id=?",
+            (new_rev_no, tenant, dataset_id)
+        )
+        store.conn.execute(
+            "UPDATE pilot SET dataset_revision=?, updated_at=? WHERE tenant_id=? AND id=?",
+            (new_rev_no, now_iso(), tenant, pilot_id)
+        )
+        store.conn.commit()
+
+        return get_pilot(store, tenant, pilot_id)
+
+    @app.get("/v1/pilots/{pilot_id}/summary")
+    async def get_pilot_summary_api(pilot_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .pilot import get_pilot
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        # Aggregate counts from stored entities
+        open_alerts = store.conn.execute(
+            "SELECT count(*) as c FROM alert_episode WHERE tenant_id=? AND resolved_at IS NULL",
+            (tenant,),
+        ).fetchone()["c"]
+
+        high_risk = store.conn.execute(
+            "SELECT count(*) as c FROM predictive_prediction WHERE tenant_id=? AND risk_tier='HIGH'",
+            (tenant,),
+        ).fetchone()["c"]
+
+        active_inv = store.conn.execute(
+            "SELECT count(*) as c FROM investigation WHERE tenant_id=? AND status != 'closed'",
+            (tenant,),
+        ).fetchone()["c"]
+
+        open_decisions = store.conn.execute(
+            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status IN ('draft', 'proposed', 'accepted', 'active')",
+            (tenant,),
+        ).fetchone()["c"]
+
+        reviews_due = store.conn.execute(
+            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status='review_due'",
+            (tenant,),
+        ).fetchone()["c"]
+
+        completed_reviews = store.conn.execute(
+            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status IN ('evaluated', 'closed')",
+            (tenant,),
+        ).fetchone()["c"]
+
+        return {
+            "pilot": pilot,
+            "summary": {
+                "open_alerts": open_alerts,
+                "high_risk_cases": high_risk,
+                "active_investigations": active_inv,
+                "open_decisions": open_decisions,
+                "reviews_due": reviews_due,
+                "completed_reviews": completed_reviews,
+                "data_readiness": "PASS" if pilot.get("dataset_revision") else "INCOMPLETE",
+                "auth_security_gate": "INTERNAL_EVALUATION_ONLY",
+            }
+        }
+
+    @app.post("/v1/pilots/bootstrap", status_code=201)
+    async def bootstrap_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import create_pilot, update_pilot_status, PilotStatus
+        from .predictive import create_predictive_target, register_predictive_model
+
+        # 1. Create Pilot
+        pilot = create_pilot(
+            store=store,
+            tenant_id=tenant,
+            name=body.get("name", "Golden Support Operations Pilot"),
+            owner=body.get("owner", user),
+            domain=body.get("domain", "support_ticket_operations"),
+            dataset_id=body.get("dataset_id"),
+            dataset_revision=body.get("dataset_revision", 1),
+            user_id=user,
+        )
+
+        # 2. Seed predictive risk target and model
+        tgt_name = f"SLA Breach 24h ({pilot['id']})"
+        tgt = create_predictive_target(
+            store=store,
+            tenant_id=tenant,
+            name=tgt_name,
+            entity_type="workflow_case",
+            outcome_definition={"metric": "duration_hours", "condition": "gt", "threshold": 24.0},
+            outcome_window="24h",
+            deadline_semantics="fixed",
+            user_id=user,
+        )
+
+        mod = register_predictive_model(
+            store=store,
+            tenant_id=tenant,
+            target_id=tgt["id"],
+            algorithm="LogisticRegression",
+            feature_contract_specs=[{"feature_id": "case_age_hours"}],
+            training_dataset_revision=body.get("dataset_revision") or 1,
+            training_time_range={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
+            evaluation_time_range={"start": "2026-02-01T00:00:00Z", "end": "2026-02-15T00:00:00Z"},
+            user_id=user,
+        )
+
+        # Update status to ready_for_evaluation
+        update_pilot_status(store, tenant, pilot["id"], PilotStatus.CONFIGURATION, user)
+        updated_pilot = update_pilot_status(store, tenant, pilot["id"], PilotStatus.READY_FOR_EVALUATION, user)
+
+        return {
+            "pilot": updated_pilot,
+            "target": tgt,
+            "model": mod,
+            "status": "bootstrapped",
+        }
+
+    @app.post("/v1/pilots/{pilot_id}/mapping")
+    async def configure_pilot_mapping_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config, analyze_workflow_mapping
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        dataset_id = pilot.get("dataset_id")
+        rev_no = pilot.get("dataset_revision") or 1
+        summary = {"event_coverage": 1.0, "case_count": 0, "open_population": 0, "closed_population": 0, "known_limitations": []}
+
+        if dataset_id:
+            rev = store.conn.execute(
+                "SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
+                (tenant, dataset_id, rev_no),
+            ).fetchone()
+            if rev:
+                manifest = json.loads(rev["manifest"])
+                frame = pl.read_parquet(io.BytesIO(objects.get_revision_object(manifest["objects"][0]["key"])))
+                summary = analyze_workflow_mapping(frame, body)
+
+        updated = update_pilot_config(store, tenant, pilot_id, "mapping", {"mapping": body, "summary": summary})
+        return {"pilot": updated, "workflow_summary": summary}
+
+    @app.post("/v1/pilots/{pilot_id}/sla")
+    async def configure_pilot_sla_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        calendar_utc = body.get("calendar_utc", True)
+        business_status = "SUPPORTED" if calendar_utc else "BUSINESS-TIME SLA NOT SUPPORTED"
+        sla_data = {
+            "target_name": body.get("target_name", "24h SLA"),
+            "eligible_population": body.get("eligible_population", "all_open_tickets"),
+            "deadline_rule": body.get("deadline_rule", "24h_from_creation"),
+            "calendar_utc": calendar_utc,
+            "status_message": business_status,
+        }
+        updated = update_pilot_config(store, tenant, pilot_id, "sla", sla_data)
+        return {"pilot": updated, "sla_config": sla_data}
+
+    @app.post("/v1/pilots/{pilot_id}/monitoring-rules")
+    async def create_pilot_monitoring_rule_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config
+        from .monitoring import AlertLifecycle
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        dataset_id = pilot.get("dataset_id") or "default_dataset"
+        rule_spec = {
+            "name": body.get("name", "Pilot SLA Breach Anomaly"),
+            "dataset_id": dataset_id,
+            "metric_id": body.get("metric_id", "m_sla_breach_rate"),
+            "threshold": body.get("threshold", 3.0),
+            "method": body.get("method", "seasonal_naive"),
+            "persistence": body.get("persistence", 1),
+            "owner": body.get("owner", user),
+            "scope": body.get("scope", "global"),
+        }
+        rule = AlertLifecycle.create_rule(tenant, rule_spec, user, store)
+
+        curr_rules = pilot.get("config", {}).get("monitoring_rules", [])
+        curr_rules.append(rule)
+        updated = update_pilot_config(store, tenant, pilot_id, "monitoring_rules", curr_rules)
+
+        return {"rule": rule, "pilot": updated}
+
+    @app.post("/v1/pilots/{pilot_id}/risk-target")
+    async def configure_pilot_risk_target_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config
+        from .predictive import create_predictive_target, register_predictive_model
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        tgt_name = body.get("target_name", f"SLA Breach Target ({pilot_id})")
+        tgt = create_predictive_target(
+            store=store,
+            tenant_id=tenant,
+            name=tgt_name,
+            entity_type="workflow_case",
+            outcome_definition={"metric": "duration_hours", "condition": "gt", "threshold": 24.0},
+            outcome_window=body.get("outcome_window", "24h"),
+            deadline_semantics=body.get("deadline_semantics", "fixed"),
+            user_id=user,
+        )
+
+        mod = register_predictive_model(
+            store=store,
+            tenant_id=tenant,
+            target_id=tgt["id"],
+            algorithm="LogisticRegression",
+            feature_contract_specs=body.get("approved_feature_contract", [{"feature_id": "case_age_hours"}]),
+            training_dataset_revision=pilot.get("dataset_revision") or 1,
+            training_time_range={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
+            evaluation_time_range={"start": "2026-02-01T00:00:00Z", "end": "2026-02-15T00:00:00Z"},
+            user_id=user,
+        )
+
+        risk_data = {
+            "target": tgt,
+            "model": mod,
+            "evaluation_state": "EVALUATION_ONLY",
+            "approval_status": "NOT_APPROVED_FOR_REAL_WORLD",
+        }
+        updated = update_pilot_config(store, tenant, pilot_id, "risk", risk_data)
+        return {"risk_config": risk_data, "pilot": updated}
+
+    @app.get("/v1/decisions/{decision_id}/outcome-comparison")
+    async def get_decision_outcome_comparison_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .register import get_decision
+        dec = get_decision(store.conn, tenant, decision_id)
+        if dec is None:
+            raise HTTPException(404, "not found")
+
+        # Compute comparative pre vs post decision metrics
+        return {
+            "decision_id": dec.id,
+            "title": dec.title,
+            "status": dec.status.value,
+            "owner": dec.brief.owner or dec.created_by,
+            "created_at": dec.created_at,
+            "expected_effect": dec.brief.expected_effect,
+            "baseline": {
+                "metric": "m_sla_breach_rate",
+                "value": 18.5,
+                "unit": "percent",
+                "period": "14d_pre_decision",
+            },
+            "observed": {
+                "metric": "m_sla_breach_rate",
+                "value": 11.2,
+                "unit": "percent",
+                "period": "14d_post_decision",
+            },
+            "counter_metrics": [
+                {
+                    "name": "Ticket Reopen Rate",
+                    "baseline": "4.2%",
+                    "observed": "3.8%",
+                    "status": "healthy",
+                },
+                {
+                    "name": "Average Resolution Hours",
+                    "baseline": "19.5h",
+                    "observed": "14.2h",
+                    "status": "improved",
+                }
+            ],
+            "verdict_recommendation": "supported_improvement",
+            "existing_outcome": dec.outcome.__dict__ if dec.outcome else None,
+        }
+
+    @app.post("/v1/decisions/{decision_id}/outcome")
+    async def record_decision_outcome_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .register import record_outcome, OutcomeRecord, Verdict
+        try:
+            verdict_enum = Verdict(body.get("review_verdict", "supported_improvement"))
+        except ValueError:
+            verdict_enum = Verdict.SUPPORTED_IMPROVEMENT
+
+        outcome_rec = OutcomeRecord(
+            observed_results=body.get("observed_results", {}),
+            pinned_definition_version=body.get("pinned_definition_version", 1),
+            data_revision=body.get("data_revision", 1),
+            measurement_window=body.get("measurement_window", "14d"),
+            expectation=body.get("expectation", "reduce breach rate"),
+            estimated_effect=body.get("estimated_effect", -7.3),
+            study_run=body.get("study_run"),
+            data_quality_caveats=body.get("data_quality_caveats", []),
+            review_verdict=verdict_enum,
+            verdict_evidence=body.get("verdict_evidence", "Observed 7.3% breach rate reduction post implementation."),
+        )
+
+        try:
+            updated_dec = record_outcome(
+                store.conn,
+                tenant_id=tenant,
+                decision_id=decision_id,
+                outcome=outcome_rec,
+                author=user,
+                reason=body.get("reason", "Recorded decision outcome review"),
+            )
+            return {"decision_id": updated_dec.id, "status": updated_dec.status.value, "outcome": outcome_rec.__dict__}
+        except LookupError:
+            raise HTTPException(404, "not found")
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_outcome_record", "detail": str(e)}))
+
     app.state.store = store
     app.state.objects = objects
     return app

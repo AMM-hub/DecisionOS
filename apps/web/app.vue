@@ -10,6 +10,8 @@ const links = [
   { to: '/forecasts', label: 'Forecasts', key: 'nav.forecasts' },
   { to: '/workflow', label: 'Workflow', key: 'nav.workflow' },
   { to: '/risk', label: 'Risk Queue', key: 'nav.risk' },
+  { to: '/pilot/setup', label: 'Pilot Setup', key: 'nav.pilot' },
+  { to: '/pilot', label: 'Pilot Center', key: 'nav.pilotDashboard' },
   { to: '/scenarios', label: 'Scenarios', key: 'nav.scenarios' },
   { to: '/monitoring', label: 'Monitoring', key: 'nav.monitoring' },
   { to: '/investigations', label: 'Investigations', key: 'nav.investigations' },
