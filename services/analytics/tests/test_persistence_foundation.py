@@ -30,8 +30,8 @@ def test_composite_tenant_integrity_enforcement(tmp_path):
     conn = store.conn
 
     # Setup tenant alpha and beta
-    conn.execute("INSERT INTO tenant VALUES ('tenant_alpha', 'Alpha Inc')")
-    conn.execute("INSERT INTO tenant VALUES ('tenant_beta', 'Beta Inc')")
+    conn.execute("INSERT OR REPLACE INTO tenant VALUES ('tenant_alpha', 'Alpha Inc')")
+    conn.execute("INSERT OR REPLACE INTO tenant VALUES ('tenant_beta', 'Beta Inc')")
     conn.commit()
 
     # Create investigation for tenant_alpha
@@ -71,8 +71,8 @@ def test_decision_evidence_binding_tenant_isolation(tmp_path):
     store = Store(db_path)
     conn = store.conn
 
-    conn.execute("INSERT INTO tenant VALUES ('tenant_alpha', 'Alpha Inc')")
-    conn.execute("INSERT INTO tenant VALUES ('tenant_beta', 'Beta Inc')")
+    conn.execute("INSERT OR REPLACE INTO tenant VALUES ('tenant_alpha', 'Alpha Inc')")
+    conn.execute("INSERT OR REPLACE INTO tenant VALUES ('tenant_beta', 'Beta Inc')")
 
     # Create Alpha decision
     dec_alpha = new_id()
