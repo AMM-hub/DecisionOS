@@ -11,7 +11,12 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
+import numpy as np
 import polars as pl
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, brier_score_loss, confusion_matrix, log_loss, roc_auc_score
+from sklearn.preprocessing import StandardScaler
 
 from .predictive import FeatureContract, RiskTargetSpec
 
@@ -250,3 +255,280 @@ def assess_risk_suitability(
             "imbalance_ratio": round(imbalance_ratio, 2) if math.isfinite(imbalance_ratio) else None,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Classification Models
+# ---------------------------------------------------------------------------
+
+class BaseRateClassifier:
+    """Baseline classifier predicting constant training set positive prevalence."""
+
+    def __init__(self) -> None:
+        self.base_rate: float = 0.5
+        self.classes_: np.ndarray = np.array([0, 1])
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> BaseRateClassifier:
+        if len(y) > 0:
+            self.base_rate = float(np.mean(y))
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        n = len(X)
+        probs = np.zeros((n, 2))
+        probs[:, 1] = self.base_rate
+        probs[:, 0] = 1.0 - self.base_rate
+        return probs
+
+
+class LogisticRegressionClassifier:
+    """Logistic regression classifier with scaler fit on training data."""
+
+    def __init__(self) -> None:
+        self.scaler = StandardScaler()
+        self.model = LogisticRegression(solver="lbfgs", max_iter=1000, random_state=42)
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> LogisticRegressionClassifier:
+        if len(X) > 0:
+            X_scaled = self.scaler.fit_transform(X)
+            self.model.fit(X_scaled, y)
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if len(X) == 0:
+            return np.zeros((0, 2))
+        X_scaled = self.scaler.transform(X)
+        return self.model.predict_proba(X_scaled)
+
+
+class RandomForestChallengerClassifier:
+    """RandomForest challenger model."""
+
+    def __init__(self) -> None:
+        self.model = RandomForestClassifier(n_estimators=50, max_depth=4, random_state=42)
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> RandomForestChallengerClassifier:
+        if len(X) > 0:
+            self.model.fit(X, y)
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if len(X) == 0:
+            return np.zeros((0, 2))
+        return self.model.predict_proba(X)
+
+
+# ---------------------------------------------------------------------------
+# Calibration & Metrics
+# ---------------------------------------------------------------------------
+
+class PlattCalibrator:
+    """Platt / Sigmoid scaling probability calibrator.
+    Uses separate validation dataset not used during model fitting.
+    If sample size is insufficient, abstains from claiming calibrated probabilities.
+    """
+
+    def __init__(self, min_calib_samples: int = 10, min_pos_events: int = 2) -> None:
+        self.min_calib_samples = min_calib_samples
+        self.min_pos_events = min_pos_events
+        self.calibrator: LogisticRegression | None = None
+        self.is_calibrated: bool = False
+        self.probability_status: str = "uncalibrated"
+
+    def fit(self, raw_probs: np.ndarray, y_val: np.ndarray) -> PlattCalibrator:
+        n_samples = len(y_val)
+        n_pos = int(np.sum(y_val))
+
+        if n_samples < self.min_calib_samples or n_pos < self.min_pos_events or n_pos == n_samples:
+            self.is_calibrated = False
+            self.probability_status = "uncalibrated"
+            self.calibrator = None
+            return self
+
+        eps = 1e-7
+        clipped = np.clip(raw_probs, eps, 1.0 - eps)
+        logit_scores = np.log(clipped / (1.0 - clipped)).reshape(-1, 1)
+
+        lr = LogisticRegression(solver="lbfgs", C=1.0)
+        lr.fit(logit_scores, y_val)
+        self.calibrator = lr
+        self.is_calibrated = True
+        self.probability_status = "calibrated"
+        return self
+
+    def transform(self, raw_probs: np.ndarray) -> np.ndarray:
+        if not self.is_calibrated or self.calibrator is None:
+            return raw_probs
+
+        eps = 1e-7
+        clipped = np.clip(raw_probs, eps, 1.0 - eps)
+        logit_scores = np.log(clipped / (1.0 - clipped)).reshape(-1, 1)
+        return self.calibrator.predict_proba(logit_scores)[:, 1]
+
+
+def calculate_classification_metrics(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    threshold: float = 0.5,
+) -> dict[str, Any]:
+    """Calculate comprehensive classification metrics."""
+    n_samples = len(y_true)
+    if n_samples == 0:
+        return {"sample_count": 0}
+
+    pos_events = int(np.sum(y_true))
+    prevalence = float(np.mean(y_true))
+
+    brier = float(brier_score_loss(y_true, y_prob)) if n_samples > 0 else None
+
+    roc_auc = None
+    pr_auc = None
+    log_l = None
+
+    if 0 < pos_events < n_samples:
+        try:
+            roc_auc = float(roc_auc_score(y_true, y_prob))
+        except Exception:
+            roc_auc = None
+        try:
+            pr_auc = float(average_precision_score(y_true, y_prob))
+        except Exception:
+            pr_auc = None
+        try:
+            log_l = float(log_loss(y_true, np.clip(y_prob, 1e-7, 1 - 1e-7)))
+        except Exception:
+            log_l = None
+
+    y_pred = (y_prob >= threshold).astype(int)
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+
+    precision = float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
+    recall = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+
+    return {
+        "sample_count": n_samples,
+        "positive_event_count": pos_events,
+        "prevalence": round(prevalence, 4),
+        "brier_score": round(brier, 6) if brier is not None else None,
+        "roc_auc": round(roc_auc, 6) if roc_auc is not None else None,
+        "pr_auc": round(pr_auc, 6) if pr_auc is not None else None,
+        "log_loss": round(log_l, 6) if log_l is not None else None,
+        "threshold": round(threshold, 4),
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Threshold Policy & Candidate Promotion
+# ---------------------------------------------------------------------------
+
+def determine_operating_threshold(
+    y_prob: np.ndarray,
+    y_true: np.ndarray | None = None,
+    policy_type: str = "capacity",
+    policy_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Determine operating threshold based on capacity (top K), precision target, recall target, or fixed."""
+    policy_params = policy_params or {}
+
+    if len(y_prob) == 0:
+        return {"threshold": 0.5, "policy_type": policy_type, "flagged_count": 0}
+
+    sorted_probs = np.sort(y_prob)[::-1]
+
+    if policy_type == "capacity":
+        capacity = int(policy_params.get("capacity", 20))
+        if capacity >= len(sorted_probs):
+            threshold = float(sorted_probs[-1])
+        else:
+            threshold = float(sorted_probs[capacity - 1])
+        flagged = int(np.sum(y_prob >= threshold))
+        return {
+            "threshold": round(threshold, 4),
+            "policy_type": "capacity",
+            "policy_params": {"capacity": capacity},
+            "flagged_count": flagged,
+        }
+
+    elif policy_type == "precision":
+        target_prec = float(policy_params.get("target_precision", 0.80))
+        best_t = 0.5
+        if y_true is not None and len(y_true) > 0:
+            thresholds = np.unique(sorted_probs)
+            for t in thresholds:
+                preds = (y_prob >= t).astype(int)
+                tp = np.sum((preds == 1) & (y_true == 1))
+                fp = np.sum((preds == 1) & (y_true == 0))
+                prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                if prec >= target_prec:
+                    best_t = float(t)
+                    break
+        return {
+            "threshold": round(best_t, 4),
+            "policy_type": "precision",
+            "policy_params": {"target_precision": target_prec},
+            "flagged_count": int(np.sum(y_prob >= best_t)),
+        }
+
+    elif policy_type == "recall":
+        target_rec = float(policy_params.get("target_recall", 0.80))
+        best_t = 0.5
+        if y_true is not None and len(y_true) > 0:
+            thresholds = np.unique(sorted_probs)[::-1]
+            for t in thresholds:
+                preds = (y_prob >= t).astype(int)
+                tp = np.sum((preds == 1) & (y_true == 1))
+                fn = np.sum((preds == 0) & (y_true == 1))
+                rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                if rec >= target_rec:
+                    best_t = float(t)
+                    break
+        return {
+            "threshold": round(best_t, 4),
+            "policy_type": "recall",
+            "policy_params": {"target_recall": target_rec},
+            "flagged_count": int(np.sum(y_prob >= best_t)),
+        }
+
+    else:
+        fixed_t = float(policy_params.get("fixed_threshold", 0.5))
+        return {
+            "threshold": round(fixed_t, 4),
+            "policy_type": "fixed",
+            "policy_params": {"fixed_threshold": fixed_t},
+            "flagged_count": int(np.sum(y_prob >= fixed_t)),
+        }
+
+
+def promote_risk_model(
+    baseline_metrics: dict[str, Any],
+    challenger_metrics: dict[str, Any],
+    probability_status: str,
+    margin_brier: float = 0.01,
+    margin_pr_auc: float = 0.02,
+) -> tuple[str, str]:
+    """Candidate Promotion Rule (7.6):
+    Challenger promoted over baseline only if calibrated and materially improves Brier/PR-AUC.
+    """
+    b_brier = baseline_metrics.get("brier_score")
+    c_brier = challenger_metrics.get("brier_score")
+
+    b_prauc = baseline_metrics.get("pr_auc")
+    c_prauc = challenger_metrics.get("pr_auc")
+
+    if probability_status != "calibrated":
+        return "BaseRateClassifier", "Probability is uncalibrated; retaining baseline model."
+
+    if c_brier is None or b_brier is None:
+        return "BaseRateClassifier", "Metrics unavailable for candidate promotion; retaining baseline model."
+
+    improved_brier = (b_brier - c_brier) >= margin_brier
+    improved_prauc = (c_prauc - b_prauc) >= margin_pr_auc if (c_prauc and b_prauc) else False
+
+    if improved_brier or improved_prauc:
+        return "LogisticRegression", f"Challenger materially improved baseline (Brier diff: {b_brier - c_brier:.4f})."
+
+    return "BaseRateClassifier", "Challenger did not materially improve baseline model performance."
