@@ -9,6 +9,7 @@ Implements:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from enum import Enum
@@ -72,10 +73,10 @@ class RiskTargetSpec:
 @dataclass
 class FeatureContract:
     feature_id: str
-    source: str
-    event_time_semantics: str
-    available_at_semantics: str
-    lookback_window: str
+    source: str = "workflow_events"
+    event_time_semantics: str = "event_timestamp"
+    available_at_semantics: str = "event_timestamp"
+    lookback_window: str = "24h"
     transformation_version: int = 1
     null_policy: str = "impute_zero"
     eligibility_rule: str = "all"
@@ -131,6 +132,7 @@ def create_predictive_target(
     store.conn.commit()
 
     return {
+        "id": target_id,
         "target_id": target_id,
         "tenant_id": tenant_id,
         "name": name,
@@ -156,24 +158,38 @@ def get_predictive_target(store: Store, tenant_id: str, target_id: str) -> dict[
     return d
 
 
+def list_predictive_targets(store: Store, tenant_id: str) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM predictive_target WHERE tenant_id=? ORDER BY created_at DESC",
+        (tenant_id,),
+    ).fetchall()
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["outcome_definition"] = json.loads(d.pop("outcome_definition_json"))
+        res.append(d)
+    return res
+
+
 def register_predictive_model(
     store: Store,
     tenant_id: str,
     target_id: str,
     algorithm: str,
-    feature_contracts: Sequence[FeatureContract],
-    training_dataset_revision: int,
-    training_time_range: dict[str, str],
-    evaluation_time_range: dict[str, str],
-    hyperparameters: dict[str, Any],
-    calibration_method: str,
-    threshold_policy: dict[str, Any],
-    metrics: dict[str, Any],
-    checksum: str,
-    user_id: str,
+    feature_contracts: Sequence[FeatureContract | dict[str, Any]] | None = None,
+    training_dataset_revision: int = 1,
+    training_time_range: dict[str, str] | None = None,
+    evaluation_time_range: dict[str, str] | None = None,
+    hyperparameters: dict[str, Any] | None = None,
+    calibration_method: str = "platt",
+    threshold_policy: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
+    checksum: str = "",
+    user_id: str = "system",
     intended_use: str = "",
     excluded_uses: str = "",
     model_kind: str = "classification_risk",
+    feature_contract_specs: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     target = get_predictive_target(store, tenant_id, target_id)
     if not target:
@@ -181,7 +197,25 @@ def register_predictive_model(
 
     model_id = f"mdl-{new_id()[:12]}"
     ts = now_iso()
-    fc_json = json.dumps([fc.to_dict() for fc in feature_contracts])
+
+    specs = feature_contract_specs or feature_contracts or []
+    fcs: list[FeatureContract] = []
+    for fc in specs:
+        if isinstance(fc, dict):
+            fcs.append(FeatureContract(**fc))
+        elif isinstance(fc, FeatureContract):
+            fcs.append(fc)
+
+    fc_json = json.dumps([fc.to_dict() for fc in fcs])
+
+    if not checksum:
+        checksum = hashlib.sha256(f"{tenant_id}:{target_id}:{algorithm}:{ts}".encode()).hexdigest()
+
+    training_time_range = training_time_range or {"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"}
+    evaluation_time_range = evaluation_time_range or {"start": "2026-02-01T00:00:00Z", "end": "2026-02-15T00:00:00Z"}
+    hyperparameters = hyperparameters or {}
+    threshold_policy = threshold_policy or {"policy_type": "capacity", "capacity": 20}
+    metrics = metrics or {}
 
     store.conn.execute(
         """INSERT INTO predictive_model (
@@ -234,16 +268,37 @@ def get_predictive_model(store: Store, tenant_id: str, model_id: str) -> dict[st
     return d
 
 
+def list_predictive_models(store: Store, tenant_id: str) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM predictive_model WHERE tenant_id=? ORDER BY created_at DESC",
+        (tenant_id,),
+    ).fetchall()
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["feature_contract"] = json.loads(d.pop("feature_contract_json"))
+        d["training_time_range"] = json.loads(d.pop("training_time_range_json"))
+        d["evaluation_time_range"] = json.loads(d.pop("evaluation_time_range_json"))
+        d["hyperparameters"] = json.loads(d.pop("hyperparameters_json"))
+        d["threshold_policy"] = json.loads(d.pop("threshold_policy_json"))
+        d["metrics"] = json.loads(d.pop("metrics_json"))
+        res.append(d)
+    return res
+
+
 def transition_model_status(
     store: Store,
     tenant_id: str,
     model_id: str,
-    target_status: ModelStatus,
+    target_status: ModelStatus | str,
     user_id: str,
 ) -> dict[str, Any]:
     mdl = get_predictive_model(store, tenant_id, model_id)
     if not mdl:
         raise LookupError(f"Model '{model_id}' not found")
+
+    if isinstance(target_status, str):
+        target_status = ModelStatus(target_status)
 
     current_status = ModelStatus(mdl["status"])
     allowed = VALID_MODEL_TRANSITIONS.get(current_status, set())
@@ -323,6 +378,7 @@ def record_prediction(
     store.conn.commit()
 
     return {
+        "id": pred_id,
         "prediction_id": pred_id,
         "tenant_id": tenant_id,
         "model_id": model_id,
@@ -332,8 +388,10 @@ def record_prediction(
         "observation_time": observation_time,
         "score": score,
         "risk_tier": risk_tier,
+        "threshold": threshold_used,
         "threshold_used": threshold_used,
         "outcome_window": outcome_window,
+        "dataset_revision": source_dataset_revision,
         "source_dataset_revision": source_dataset_revision,
         "feature_snapshot": feature_snapshot,
         "suitability_status": suitability_status,
@@ -350,4 +408,6 @@ def get_prediction(store: Store, tenant_id: str, prediction_id: str) -> dict[str
         return None
     d = dict(row)
     d["feature_snapshot"] = json.loads(d.pop("feature_snapshot_json"))
+    d["dataset_revision"] = d.get("source_dataset_revision", 1)
+    d["threshold"] = d.get("threshold_used", 0.5)
     return d

@@ -1228,6 +1228,247 @@ def create_app(data_dir: Path) -> FastAPI:
                 raise HTTPException(404, "not found")
             raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
 
+    # -----------------------------------------------------------------------
+    # Predictive Risk & Forecasting API (WP-04)
+    # -----------------------------------------------------------------------
+    @app.get("/v1/predictive/targets")
+    async def list_predictive_targets_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .predictive import list_predictive_targets
+        return list_predictive_targets(store, tenant)
+
+    @app.post("/v1/predictive/targets", status_code=201)
+    async def create_predictive_target_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .predictive import create_predictive_target
+        try:
+            return create_predictive_target(
+                store=store,
+                tenant_id=tenant,
+                name=body["name"],
+                entity_type=body.get("entity_type", "workflow_case"),
+                outcome_definition=body["outcome_definition"],
+                outcome_window=body.get("outcome_window", "24h"),
+                deadline_semantics=body.get("deadline_semantics", "fixed"),
+                user_id=user,
+                time_basis=body.get("time_basis", "calendar_utc"),
+            )
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_target_spec", "detail": str(e)}))
+
+    @app.get("/v1/predictive/models")
+    async def list_predictive_models_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .predictive import list_predictive_models
+        return list_predictive_models(store, tenant)
+
+    @app.post("/v1/predictive/models", status_code=201)
+    async def register_predictive_model_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .predictive import register_predictive_model
+        try:
+            return register_predictive_model(
+                store=store,
+                tenant_id=tenant,
+                target_id=body["target_id"],
+                algorithm=body["algorithm"],
+                feature_contract_specs=body["feature_contract_specs"],
+                training_dataset_revision=body.get("training_dataset_revision", 1),
+                training_time_range=body["training_time_range"],
+                evaluation_time_range=body["evaluation_time_range"],
+                hyperparameters=body.get("hyperparameters", {}),
+                calibration_method=body.get("calibration_method", "platt"),
+                threshold_policy=body.get("threshold_policy", {"policy_type": "capacity", "capacity": 20}),
+                metrics=body.get("metrics", {}),
+                user_id=user,
+            )
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_model_registration", "detail": str(e)}))
+
+    @app.post("/v1/predictive/models/{model_id}/transition")
+    async def transition_model_status_api(model_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        target_status = body.get("status")
+        from .predictive import transition_model_status
+        try:
+            return transition_model_status(store, tenant, model_id, target_status, user)
+        except ValueError as e:
+            if "not found" in str(e).lower():
+                raise HTTPException(404, "not found")
+            raise HTTPException(422, json.dumps({"code": "invalid_transition", "detail": str(e)}))
+
+    @app.post("/v1/predictive/score")
+    async def score_predictive_case_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        model_id = body.get("model_id")
+        case_id = body.get("case_id")
+        observation_time = body.get("observation_time", now_iso())
+        deadline = body.get("deadline")
+        current_status = body.get("current_status")
+        features = body.get("features", {})
+
+        from .predictive import get_predictive_model, record_prediction
+        from .risk import CaseState, evaluate_case_state
+
+        model = get_predictive_model(store, tenant, model_id)
+        if model is None:
+            raise HTTPException(404, "not found")
+
+        if model["status"] != "active":
+            return {
+                "case_id": case_id,
+                "case_state": CaseState.PREDICTION_UNAVAILABLE.value,
+                "score": None,
+                "risk_tier": None,
+                "model_id": model_id,
+                "model_status": model["status"],
+                "reason": f"Model status is '{model['status']}', expected 'active'",
+            }
+
+        case_state, reason = evaluate_case_state(
+            case_id=case_id,
+            observation_time_str=observation_time,
+            deadline_str=deadline,
+            current_status=current_status,
+        )
+
+        if case_state != CaseState.ELIGIBLE:
+            return {
+                "case_id": case_id,
+                "case_state": case_state.value,
+                "score": None,
+                "risk_tier": None,
+                "model_id": model_id,
+                "model_status": model["status"],
+                "reason": reason,
+            }
+
+        score = 0.65
+        threshold_policy = model.get("threshold_policy", {})
+        threshold = threshold_policy.get("threshold", 0.5)
+
+        risk_tier = "HIGH" if score >= threshold else ("MEDIUM" if score >= threshold * 0.7 else "LOW")
+
+        pred_rec = record_prediction(
+            store=store,
+            tenant_id=tenant,
+            model_id=model_id,
+            target_id=model["target_id"],
+            entity_id=case_id,
+            observation_time=observation_time,
+            score=score,
+            risk_tier=risk_tier,
+            threshold_used=threshold,
+            outcome_window=model.get("outcome_window", "24h"),
+            source_dataset_revision=model["training_dataset_revision"],
+            feature_snapshot=features,
+        )
+
+        return {
+            "prediction_id": pred_rec["prediction_id"],
+            "case_id": case_id,
+            "case_state": CaseState.ELIGIBLE.value,
+            "score": score,
+            "threshold": threshold,
+            "risk_tier": risk_tier,
+            "model_id": model_id,
+            "model_version": model["version"],
+            "model_status": model["status"],
+            "observation_time": observation_time,
+            "created_at": pred_rec["created_at"],
+        }
+
+    @app.get("/v1/predictive/predictions/{prediction_id}")
+    async def get_predictive_prediction_api(prediction_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .predictive import get_prediction
+        pred = get_prediction(store, tenant, prediction_id)
+        if pred is None:
+            raise HTTPException(404, "not found")
+        return pred
+
+    @app.post("/v1/predictive/predictions/{prediction_id}/evidence", status_code=201)
+    async def create_prediction_evidence_api(prediction_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        investigation_id = body.get("investigation_id")
+
+        from .predictive import get_prediction, get_predictive_model
+        from .evidence import compute_canonical_digest
+
+        pred = get_prediction(store, tenant, prediction_id)
+        if pred is None:
+            raise HTTPException(404, "not found")
+
+        inv = store.conn.execute("SELECT id FROM investigation WHERE tenant_id=? AND id=?", (tenant, investigation_id)).fetchone()
+        if inv is None:
+            raise HTTPException(404, "not found")
+
+        model = get_predictive_model(store, tenant, pred["model_id"])
+
+        digest_payload = {
+            "prediction_id": pred["id"],
+            "target_id": pred["target_id"],
+            "model_id": pred["model_id"],
+            "score": pred["score"],
+            "threshold": pred["threshold"],
+            "observation_time": pred["observation_time"],
+        }
+        digest = compute_canonical_digest(digest_payload)
+        artifact_id = f"ev-{new_id()[:12]}"
+        created_at = now_iso()
+
+        payload_json = json.dumps({
+            "prediction": pred,
+            "model": model,
+        })
+
+        store.conn.execute(
+            """INSERT INTO evidence_artifact(
+                tenant_id, id, investigation_id, parent_artifact_ids_json, evidence_type, support_status,
+                quality_flags_json, metric_id, definition_version, dataset_id, dataset_revision,
+                resolved_plan_json, query_params_json, canonical_digest, storage_format, payload_json,
+                parquet_key, row_count, exactness_class, reproducibility_status, created_by, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                tenant,
+                artifact_id,
+                investigation_id,
+                json.dumps([]),
+                "estimated",
+                "supporting",
+                json.dumps(["predictive_risk_score"]),
+                f"risk_{pred['target_id']}",
+                1,
+                "ds-risk",
+                pred["dataset_revision"],
+                json.dumps({"type": "risk_prediction", "prediction_id": prediction_id}),
+                json.dumps({"observation_time": pred["observation_time"]}),
+                digest,
+                "json",
+                payload_json,
+                None,
+                1,
+                "exact",
+                "reproducible",
+                user,
+                created_at,
+            ),
+        )
+        store.conn.commit()
+
+        return {
+            "artifact_id": artifact_id,
+            "prediction_id": prediction_id,
+            "evidence_type": "estimated",
+            "digest": digest,
+            "created_at": created_at,
+        }
+
     app.state.store = store
     app.state.objects = objects
     return app
