@@ -280,32 +280,64 @@ def validate_pilot_data_readiness(
         reasons.append(f"Found {null_ts} rows with null timestamp")
 
     # Check SLA deadline column
-    if deadline_col and deadline_col not in df.columns and "deadline" not in df.columns:
+    if deadline_col and deadline_col not in df.columns and "sla_deadline" not in df.columns:
         warnings.append(f"SLA deadline column '{deadline_col}' not present; default SLA rules will apply")
 
     # Check Queue/Team column
-    if queue_col and queue_col not in df.columns and "team" not in df.columns:
+    if queue_col and queue_col not in df.columns and "queue" not in df.columns and "team" not in df.columns:
         warnings.append(f"Queue/Team column '{queue_col}' not present; global queue aggregation will apply")
 
-    # Event ordering / timestamp validity check per case
-    invalid_ordering_count = 0
-    completion_before_creation_count = 0
+    # Comprehensive row and case-level quality checks
+    invalid_ts_count = 0
+    out_of_order_cases = 0
+    completion_before_creation_cases = 0
+    now_dt = datetime.now(timezone.utc)
 
-    if actual_case_col and actual_ts_col:
+    if actual_case_col and actual_ts_col and actual_status_col:
         try:
-            parsed_df = df.with_columns(
-                pl.col(actual_ts_col).cast(pl.Utf8).alias("_ts_str")
+            # Analyze event ordering per case
+            sorted_df = df.filter(
+                pl.col(actual_case_col).is_not_null() & pl.col(actual_ts_col).is_not_null()
             )
-            # Check timestamp parseability
-            for val in parsed_df["_ts_str"].head(50):
-                if val:
+            for (cid,), sub in sorted_df.group_by(actual_case_col):
+                ts_list = []
+                st_list = []
+                for row in sub.select([actual_ts_col, actual_status_col]).iter_rows(named=True):
+                    raw_ts = str(row[actual_ts_col])
+                    st_val = str(row[actual_status_col]).lower() if row[actual_status_col] else ""
                     try:
-                        datetime.fromisoformat(val.replace("Z", "+00:00"))
+                        dt_val = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                        if dt_val.tzinfo is None:
+                            dt_val = dt_val.replace(tzinfo=timezone.utc)
+                        ts_list.append(dt_val)
+                        st_list.append(st_val)
+                        if (dt_val - now_dt).total_seconds() > 86400 * 365:
+                            warnings.append(f"Far future timestamp detected in case '{cid}': {raw_ts}")
                     except ValueError:
-                        reasons.append(f"Invalid timestamp format: '{val}'")
-                        break
+                        invalid_ts_count += 1
+
+                # Check timestamp ordering
+                if len(ts_list) > 1:
+                    for i in range(len(ts_list) - 1):
+                        if ts_list[i + 1] < ts_list[i]:
+                            out_of_order_cases += 1
+                            break
+
+                # Check completion before creation
+                if "created" in st_list and "completed" in st_list:
+                    c_idx = st_list.index("created")
+                    comp_idx = st_list.index("completed")
+                    if ts_list[comp_idx] < ts_list[c_idx]:
+                        completion_before_creation_cases += 1
         except Exception as e:
-            warnings.append(f"Timestamp parsing validation caveat: {e}")
+            warnings.append(f"Detailed case validation caveat: {e}")
+
+    if invalid_ts_count > 0:
+        reasons.append(f"Found {invalid_ts_count} unparseable or invalid timestamp values")
+    if out_of_order_cases > 0:
+        reasons.append(f"Invalid event ordering detected in {out_of_order_cases} cases")
+    if completion_before_creation_cases > 0:
+        reasons.append(f"Completion before creation timestamp detected in {completion_before_creation_cases} cases")
 
     unique_cases = int(df[actual_case_col].n_unique()) if actual_case_col else 0
 
@@ -320,6 +352,8 @@ def validate_pilot_data_readiness(
             "case_column": actual_case_col,
             "timestamp_column": actual_ts_col,
             "status_column": actual_status_col,
+            "out_of_order_cases": out_of_order_cases,
+            "completion_before_creation_cases": completion_before_creation_cases,
         },
     }
 

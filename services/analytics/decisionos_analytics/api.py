@@ -1585,14 +1585,20 @@ def create_app(data_dir: Path) -> FastAPI:
         ).fetchone()
         new_rev_no = (max_rev_row["mr"] or 1) + 1
 
-        # Use raw content if provided or copy existing object for refresh testing
         content_bytes = None
         if "csv_content" in body:
-            df = pl.read_csv(io.StringIO(body["csv_content"]))
-            buf = io.BytesIO()
-            df.write_parquet(buf)
-            content_bytes = buf.getvalue()
-        else:
+            try:
+                df = pl.read_csv(io.StringIO(body["csv_content"]))
+                if df.height == 0:
+                    raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "CSV content is empty"}))
+                buf = io.BytesIO()
+                df.write_parquet(buf)
+                content_bytes = buf.getvalue()
+            except Exception as e:
+                if isinstance(e, HTTPException):
+                    raise e
+                raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": f"CSV parse error: {e}"}))
+        elif body.get("use_previous_revision"):
             old_rev = store.conn.execute(
                 "SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
                 (tenant, dataset_id, max_rev_row["mr"]),
@@ -1600,9 +1606,8 @@ def create_app(data_dir: Path) -> FastAPI:
             if old_rev:
                 old_manifest = json.loads(old_rev["manifest"])
                 content_bytes = objects.get_revision_object(old_manifest["objects"][0]["key"])
-
-        if not content_bytes:
-            raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "No valid refresh content provided"}))
+        else:
+            raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "Must provide csv_content or use_previous_revision flag"}))
 
         obj_res = objects.put_revision_object(tenant, dataset_id, new_rev_no, f"refresh-rev-{new_rev_no}.parquet", content_bytes)
         manifest = {"objects": [{"key": obj_res["key"]}]}
