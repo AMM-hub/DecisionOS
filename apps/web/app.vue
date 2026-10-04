@@ -9,6 +9,7 @@ const links = [
   { to: '/metrics', label: 'Metrics', key: 'nav.metrics' },
   { to: '/forecasts', label: 'Forecasts', key: 'nav.forecasts' },
   { to: '/workflow', label: 'Workflow', key: 'nav.workflow' },
+  { to: '/risk', label: 'Risk Queue', key: 'nav.risk' },
   { to: '/scenarios', label: 'Scenarios', key: 'nav.scenarios' },
   { to: '/monitoring', label: 'Monitoring', key: 'nav.monitoring' },
   { to: '/investigations', label: 'Investigations', key: 'nav.investigations' },
