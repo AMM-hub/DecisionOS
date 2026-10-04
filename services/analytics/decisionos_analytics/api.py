@@ -1714,7 +1714,7 @@ def create_app(data_dir: Path) -> FastAPI:
             target_id=tgt["id"],
             algorithm="LogisticRegression",
             feature_contract_specs=[{"feature_id": "case_age_hours"}],
-            training_dataset_revision=body.get("dataset_revision", 1),
+            training_dataset_revision=body.get("dataset_revision") or 1,
             training_time_range={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
             evaluation_time_range={"start": "2026-02-01T00:00:00Z", "end": "2026-02-15T00:00:00Z"},
             user_id=user,
@@ -1731,7 +1731,127 @@ def create_app(data_dir: Path) -> FastAPI:
             "status": "bootstrapped",
         }
 
+    @app.post("/v1/pilots/{pilot_id}/mapping")
+    async def configure_pilot_mapping_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config, analyze_workflow_mapping
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        dataset_id = pilot.get("dataset_id")
+        rev_no = pilot.get("dataset_revision") or 1
+        summary = {"event_coverage": 1.0, "case_count": 0, "open_population": 0, "closed_population": 0, "known_limitations": []}
+
+        if dataset_id:
+            rev = store.conn.execute(
+                "SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
+                (tenant, dataset_id, rev_no),
+            ).fetchone()
+            if rev:
+                manifest = json.loads(rev["manifest"])
+                frame = pl.read_parquet(io.BytesIO(objects.get_revision_object(manifest["objects"][0]["key"])))
+                summary = analyze_workflow_mapping(frame, body)
+
+        updated = update_pilot_config(store, tenant, pilot_id, "mapping", {"mapping": body, "summary": summary})
+        return {"pilot": updated, "workflow_summary": summary}
+
+    @app.post("/v1/pilots/{pilot_id}/sla")
+    async def configure_pilot_sla_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        calendar_utc = body.get("calendar_utc", True)
+        business_status = "SUPPORTED" if calendar_utc else "BUSINESS-TIME SLA NOT SUPPORTED"
+        sla_data = {
+            "target_name": body.get("target_name", "24h SLA"),
+            "eligible_population": body.get("eligible_population", "all_open_tickets"),
+            "deadline_rule": body.get("deadline_rule", "24h_from_creation"),
+            "calendar_utc": calendar_utc,
+            "status_message": business_status,
+        }
+        updated = update_pilot_config(store, tenant, pilot_id, "sla", sla_data)
+        return {"pilot": updated, "sla_config": sla_data}
+
+    @app.post("/v1/pilots/{pilot_id}/monitoring-rules")
+    async def create_pilot_monitoring_rule_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config
+        from .monitoring import AlertLifecycle
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        dataset_id = pilot.get("dataset_id") or "default_dataset"
+        rule_spec = {
+            "name": body.get("name", "Pilot SLA Breach Anomaly"),
+            "dataset_id": dataset_id,
+            "metric_id": body.get("metric_id", "m_sla_breach_rate"),
+            "threshold": body.get("threshold", 3.0),
+            "method": body.get("method", "seasonal_naive"),
+            "persistence": body.get("persistence", 1),
+            "owner": body.get("owner", user),
+            "scope": body.get("scope", "global"),
+        }
+        rule = AlertLifecycle.create_rule(tenant, rule_spec, user, store)
+
+        curr_rules = pilot.get("config", {}).get("monitoring_rules", [])
+        curr_rules.append(rule)
+        updated = update_pilot_config(store, tenant, pilot_id, "monitoring_rules", curr_rules)
+
+        return {"rule": rule, "pilot": updated}
+
+    @app.post("/v1/pilots/{pilot_id}/risk-target")
+    async def configure_pilot_risk_target_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .pilot import get_pilot, update_pilot_config
+        from .predictive import create_predictive_target, register_predictive_model
+        pilot = get_pilot(store, tenant, pilot_id)
+        if pilot is None:
+            raise HTTPException(404, "not found")
+
+        tgt_name = body.get("target_name", f"SLA Breach Target ({pilot_id})")
+        tgt = create_predictive_target(
+            store=store,
+            tenant_id=tenant,
+            name=tgt_name,
+            entity_type="workflow_case",
+            outcome_definition={"metric": "duration_hours", "condition": "gt", "threshold": 24.0},
+            outcome_window=body.get("outcome_window", "24h"),
+            deadline_semantics=body.get("deadline_semantics", "fixed"),
+            user_id=user,
+        )
+
+        mod = register_predictive_model(
+            store=store,
+            tenant_id=tenant,
+            target_id=tgt["id"],
+            algorithm="LogisticRegression",
+            feature_contract_specs=body.get("approved_feature_contract", [{"feature_id": "case_age_hours"}]),
+            training_dataset_revision=pilot.get("dataset_revision") or 1,
+            training_time_range={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
+            evaluation_time_range={"start": "2026-02-01T00:00:00Z", "end": "2026-02-15T00:00:00Z"},
+            user_id=user,
+        )
+
+        risk_data = {
+            "target": tgt,
+            "model": mod,
+            "evaluation_state": "EVALUATION_ONLY",
+            "approval_status": "NOT_APPROVED_FOR_REAL_WORLD",
+        }
+        updated = update_pilot_config(store, tenant, pilot_id, "risk", risk_data)
+        return {"risk_config": risk_data, "pilot": updated}
+
     app.state.store = store
     app.state.objects = objects
     return app
+
 

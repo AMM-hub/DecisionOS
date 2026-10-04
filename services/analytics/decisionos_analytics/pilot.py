@@ -322,3 +322,78 @@ def validate_pilot_data_readiness(
             "status_column": actual_status_col,
         },
     }
+
+
+def update_pilot_config(
+    store: Store,
+    tenant_id: str,
+    pilot_id: str,
+    section: str,
+    section_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge a configuration section into the pilot's config_json."""
+    pilot = get_pilot(store, tenant_id, pilot_id)
+    if not pilot:
+        raise LookupError(f"Pilot '{pilot_id}' not found for tenant '{tenant_id}'")
+
+    config = pilot.get("config", {})
+    config[section] = section_data
+    ts = now_iso()
+
+    store.conn.execute(
+        "UPDATE pilot SET config_json=?, updated_at=? WHERE tenant_id=? AND id=?",
+        (json.dumps(config), ts, tenant_id, pilot_id),
+    )
+    store.conn.commit()
+    return get_pilot(store, tenant_id, pilot_id)  # type: ignore[return-value]
+
+
+def analyze_workflow_mapping(
+    df: pl.DataFrame,
+    mapping: dict[str, str],
+) -> dict[str, Any]:
+    """Analyze workflow mapping against dataset and return summary stats & limitations."""
+    case_col = mapping.get("case_id", "ticket_id")
+    event_col = mapping.get("activity", "event")
+    ts_col = mapping.get("timestamp", "timestamp")
+    status_col = mapping.get("completion_state", "status")
+
+    actual_case = case_col if case_col in df.columns else ("case_id" if "case_id" in df.columns else None)
+    actual_event = event_col if event_col in df.columns else ("event" if "event" in df.columns else None)
+    actual_ts = ts_col if ts_col in df.columns else ("timestamp" if "timestamp" in df.columns else None)
+    actual_status = status_col if status_col in df.columns else ("status" if "status" in df.columns else None)
+
+    case_count = int(df[actual_case].n_unique()) if actual_case else 0
+    total_events = df.height
+
+    known_limitations: list[str] = []
+    if not mapping.get("transfer") or mapping.get("transfer") not in df.columns:
+        known_limitations.append("Transfer tracking not present in dataset mapping")
+    if not mapping.get("reopen") or mapping.get("reopen") not in df.columns:
+        known_limitations.append("Reopen indicator not mapped; reopen rate estimated from activity log")
+    if mapping.get("time_basis") == "business_time":
+        known_limitations.append("BUSINESS-TIME SLA NOT SUPPORTED (evaluating using UTC calendar time)")
+
+    # Closed vs open population count
+    closed_count = 0
+    if actual_status and actual_status in df.columns:
+        closed_matches = df.filter(
+            pl.col(actual_status).cast(pl.Utf8).str.to_lowercase().is_in(["closed", "resolved", "completed", "done"])
+        )
+        if actual_case:
+            closed_count = int(closed_matches[actual_case].n_unique())
+        else:
+            closed_count = closed_matches.height
+
+    open_count = max(0, case_count - closed_count)
+    event_coverage = round(min(1.0, total_events / max(1, case_count * 2)), 2)
+
+    return {
+        "case_count": case_count,
+        "total_events": total_events,
+        "open_population": open_count,
+        "closed_population": closed_count,
+        "event_coverage": event_coverage,
+        "known_limitations": known_limitations,
+    }
+
