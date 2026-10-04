@@ -125,14 +125,14 @@ The operational loop implemented today works as follows:
 
 ## 8. Recommended Next Phase
 
-### **Phase Name**: `D3-A: Predictive Risk & Operational Forecasting`
+### **Phase Name**: `D3-A: Forecast Hardening & Case-Level Classification Risk`
 
 #### Scope Summary:
 Transform DecisionOS into a proactive operational decision platform by adding:
-1. **Classification Risk Scoring Engine (W18)**: Calibrated risk probability (0.0 to 1.0) for active workflow cases breaching SLA thresholds.
-2. **Survival & Backlog Time-to-Event Projection (W19)**: Kaplan-Meier & Cox proportional hazards survival curves for open case resolution times.
-3. **Forecasting Fold Validation & Interval Evidence (W17)**: Held-out backtest evaluation (MASE/RMSE) and 80%/95% prediction intervals attached to evidence artifacts.
-4. **Proactive Investigation Launch UI**: Proactive risk-based investigation creation directly from high-risk workflow alerts.
+1. **Forecasting Fold Validation & Evidence (W17)**: Rolling-origin 3-fold cross-validation, MASE metric, prediction interval coverage, and evidence artifact persistence.
+2. **Classification Risk Scoring Engine (W18)**: Calibrated risk probability (0.0 to 1.0) for active workflow cases breaching SLA thresholds, Logistic/RandomForest models, Platt scaling, and capacity-based thresholding.
+3. **Proactive Investigation Launch UI**: Proactive risk-based investigation creation directly from high-risk active workflow cases.
+*(Survival Cox W19 and Backlog Conservation W19 are deferred to D3-B to ensure a strictly bounded, mathematically valid scope).*
 
 ---
 
