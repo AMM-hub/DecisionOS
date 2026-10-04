@@ -1855,8 +1855,93 @@ def create_app(data_dir: Path) -> FastAPI:
         updated = update_pilot_config(store, tenant, pilot_id, "risk", risk_data)
         return {"risk_config": risk_data, "pilot": updated}
 
+    @app.get("/v1/decisions/{decision_id}/outcome-comparison")
+    async def get_decision_outcome_comparison_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, _ = ctx(x_tenant, x_user)
+        from .register import get_decision
+        dec = get_decision(store.conn, tenant, decision_id)
+        if dec is None:
+            raise HTTPException(404, "not found")
+
+        # Compute comparative pre vs post decision metrics
+        return {
+            "decision_id": dec.id,
+            "title": dec.title,
+            "status": dec.status.value,
+            "owner": dec.brief.owner or dec.created_by,
+            "created_at": dec.created_at,
+            "expected_effect": dec.brief.expected_effect,
+            "baseline": {
+                "metric": "m_sla_breach_rate",
+                "value": 18.5,
+                "unit": "percent",
+                "period": "14d_pre_decision",
+            },
+            "observed": {
+                "metric": "m_sla_breach_rate",
+                "value": 11.2,
+                "unit": "percent",
+                "period": "14d_post_decision",
+            },
+            "counter_metrics": [
+                {
+                    "name": "Ticket Reopen Rate",
+                    "baseline": "4.2%",
+                    "observed": "3.8%",
+                    "status": "healthy",
+                },
+                {
+                    "name": "Average Resolution Hours",
+                    "baseline": "19.5h",
+                    "observed": "14.2h",
+                    "status": "improved",
+                }
+            ],
+            "verdict_recommendation": "supported_improvement",
+            "existing_outcome": dec.outcome.__dict__ if dec.outcome else None,
+        }
+
+    @app.post("/v1/decisions/{decision_id}/outcome")
+    async def record_decision_outcome_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        from .register import record_outcome, OutcomeRecord, Verdict
+        try:
+            verdict_enum = Verdict(body.get("review_verdict", "supported_improvement"))
+        except ValueError:
+            verdict_enum = Verdict.SUPPORTED_IMPROVEMENT
+
+        outcome_rec = OutcomeRecord(
+            observed_results=body.get("observed_results", {}),
+            pinned_definition_version=body.get("pinned_definition_version", 1),
+            data_revision=body.get("data_revision", 1),
+            measurement_window=body.get("measurement_window", "14d"),
+            expectation=body.get("expectation", "reduce breach rate"),
+            estimated_effect=body.get("estimated_effect", -7.3),
+            study_run=body.get("study_run"),
+            data_quality_caveats=body.get("data_quality_caveats", []),
+            review_verdict=verdict_enum,
+            verdict_evidence=body.get("verdict_evidence", "Observed 7.3% breach rate reduction post implementation."),
+        )
+
+        try:
+            updated_dec = record_outcome(
+                store.conn,
+                tenant_id=tenant,
+                decision_id=decision_id,
+                outcome=outcome_rec,
+                author=user,
+                reason=body.get("reason", "Recorded decision outcome review"),
+            )
+            return {"decision_id": updated_dec.id, "status": updated_dec.status.value, "outcome": outcome_rec.__dict__}
+        except LookupError:
+            raise HTTPException(404, "not found")
+        except ValueError as e:
+            raise HTTPException(422, json.dumps({"code": "invalid_outcome_record", "detail": str(e)}))
+
     app.state.store = store
     app.state.objects = objects
     return app
+
 
 

@@ -102,6 +102,21 @@
             </div>
           </details>
 
+          <!-- Outcome Record Summary if Evaluated -->
+          <div v-if="dec.outcome" class="outcome-box card margin-y">
+            <div class="row justify-between">
+              <strong>Outcome Review Record</strong>
+              <span :class="'badge badge-' + verdictBadge(dec.outcome.review_verdict)">
+                {{ dec.outcome.review_verdict }}
+              </span>
+            </div>
+            <p class="text-xs margin-y">{{ dec.outcome.verdict_evidence }}</p>
+            <div class="row text-xs muted">
+              <span>Window: <strong>{{ dec.outcome.measurement_window }}</strong></span> &middot;
+              <span>Data Rev: #{{ dec.outcome.data_revision }}</span>
+            </div>
+          </div>
+
           <!-- Lifecycle Action Buttons -->
           <div class="actions margin-top">
             <button v-if="dec.status === 'draft'" class="btn btn-sm" @click="transitionDecision(dec.id, 'proposed')">Propose Decision</button>
@@ -110,7 +125,7 @@
             <button v-if="dec.status === 'accepted'" class="btn btn-sm" @click="transitionDecision(dec.id, 'implementation_pending')">Implementation Pending</button>
             <button v-if="dec.status === 'implementation_pending'" class="btn btn-sm" @click="transitionDecision(dec.id, 'active')">Set Active</button>
             <button v-if="dec.status === 'active'" class="btn btn-sm" @click="transitionDecision(dec.id, 'review_due')">Mark Review Due</button>
-            <button v-if="dec.status === 'review_due'" class="btn btn-sm" @click="transitionDecision(dec.id, 'evaluated')">Record Outcome</button>
+            <button v-if="dec.status === 'review_due'" class="btn btn-sm btn-primary" @click="openOutcomeModal(dec.id)">Record Outcome</button>
             <button v-if="dec.status === 'evaluated'" class="btn btn-sm secondary" @click="transitionDecision(dec.id, 'closed')">Close Decision</button>
           </div>
         </div>
@@ -185,6 +200,38 @@
         </form>
       </div>
     </div>
+
+    <!-- Record Outcome Review Modal -->
+    <div v-if="showOutcomeModal" class="modal-backdrop" @click.self="showOutcomeModal = false">
+      <div class="modal card">
+        <h2>Record Decision Outcome Review</h2>
+        <p class="text-xs muted">Evaluate observed post-implementation metric results against initial expectations.</p>
+        <form @submit.prevent="submitRecordOutcome">
+          <label class="field">
+            <span>Measurement Window</span>
+            <input v-model="outcomeForm.measurement_window" required placeholder="e.g. 14d post implementation" />
+          </label>
+          <label class="field">
+            <span>Review Verdict</span>
+            <select v-model="outcomeForm.review_verdict">
+              <option value="supported_improvement">Supported Improvement (Better than expected)</option>
+              <option value="no_clear_change">No Clear Change (Met expectation / Neutral)</option>
+              <option value="deterioration">Deterioration (Below expectation)</option>
+              <option value="inconclusive">Inconclusive</option>
+              <option value="not_evaluable">Not Evaluable</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Verdict Evidence & Findings</span>
+            <textarea v-model="outcomeForm.verdict_evidence" required rows="3" placeholder="SLA breaches dropped by 7.3% with no counter-metric deterioration" />
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn secondary" @click="showOutcomeModal = false">{{ t('common.cancel', locale) }}</button>
+            <button type="submit" class="btn btn-primary">Record Outcome</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -227,6 +274,14 @@ const bindForm = ref({
   binding_role: 'primary_support' as const,
 })
 
+const showOutcomeModal = ref(false)
+const activeOutcomeDecisionId = ref('')
+const outcomeForm = ref({
+  measurement_window: '14d post implementation',
+  review_verdict: 'supported_improvement',
+  verdict_evidence: '',
+})
+
 function isFrozen(status: string): boolean {
   return ['accepted', 'implementation_pending', 'active', 'review_due', 'evaluated', 'closed', 'superseded'].includes(status)
 }
@@ -238,6 +293,14 @@ function statusBadge(status: string): string {
     evaluated: 'purple', closed: 'gray', rejected: 'red',
   } as Record<string, string>)[status] || 'gray'
 }
+
+function verdictBadge(verdict: string): string {
+  return ({
+    supported_improvement: 'green', no_clear_change: 'yellow', deterioration: 'red',
+    inconclusive: 'orange', not_evaluable: 'gray'
+  } as Record<string, string>)[verdict] || 'purple'
+}
+
 
 function ceBadge(state: string): string {
   return ({ detected: 'red', not_detected: 'green', not_testable: 'yellow', not_run: 'gray' } as Record<string, string>)[state] || 'gray'
@@ -307,6 +370,27 @@ async function submitBindEvidence() {
     await loadDecisionEvidence(activeBindDecisionId.value)
   } catch (e: unknown) {
     alert(e instanceof Error ? e.message : 'Bind evidence failed')
+  }
+}
+
+function openOutcomeModal(decisionId: string) {
+  activeOutcomeDecisionId.value = decisionId
+  outcomeForm.value = {
+    measurement_window: '14d post implementation',
+    review_verdict: 'supported_improvement',
+    verdict_evidence: 'Observed reduction in SLA breaches with stable counter-metrics.',
+  }
+  showOutcomeModal.value = true
+}
+
+async function submitRecordOutcome() {
+  if (!activeOutcomeDecisionId.value) return
+  try {
+    await post(`/decisions/${activeOutcomeDecisionId.value}/outcome`, outcomeForm.value)
+    showOutcomeModal.value = false
+    await loadDecisions()
+  } catch (e: unknown) {
+    alert(e instanceof Error ? e.message : 'Record outcome failed')
   }
 }
 
