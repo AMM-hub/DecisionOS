@@ -1274,7 +1274,7 @@ def create_app(data_dir: Path) -> FastAPI:
                 tenant_id=tenant,
                 target_id=body["target_id"],
                 algorithm=body["algorithm"],
-                feature_contract_specs=body["feature_contract_specs"],
+                feature_contract_specs=body.get("feature_contract_specs") or body.get("feature_contracts") or [],
                 training_dataset_revision=body.get("training_dataset_revision", 1),
                 training_time_range=body["training_time_range"],
                 evaluation_time_range=body["evaluation_time_range"],

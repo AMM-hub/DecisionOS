@@ -31,6 +31,7 @@ class InvestigationStatus(str, Enum):
 class SourceType(str, Enum):
     MONITORING_EPISODE = "monitoring_episode"
     WORKFLOW_BOTTLENECK = "workflow_bottleneck"
+    PREDICTIVE_RISK = "predictive_risk"
     AD_HOC = "ad_hoc"
 
 
