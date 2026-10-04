@@ -1,0 +1,13 @@
+ticket_id,created_at,timestamp,status,queue,team,owner,priority,category,sla_deadline,reopen,transfer
+T1001,2026-10-01T08:00:00Z,2026-10-01T08:00:00Z,created,Tier1,AlphaTeam,alice,high,billing,2026-10-02T08:00:00Z,0,0
+T1001,2026-10-01T08:00:00Z,2026-10-01T09:30:00Z,in_progress,Tier1,AlphaTeam,alice,high,billing,2026-10-02T08:00:00Z,0,0
+T1001,2026-10-01T08:00:00Z,2026-10-01T14:00:00Z,completed,Tier1,AlphaTeam,alice,high,billing,2026-10-02T08:00:00Z,0,0
+T1002,2026-10-01T09:00:00Z,2026-10-01T09:00:00Z,created,Tier2,BetaTeam,bob,critical,technical,2026-10-02T09:00:00Z,0,0
+T1002,2026-10-01T09:00:00Z,2026-10-01T10:00:00Z,in_progress,Tier2,BetaTeam,bob,critical,technical,2026-10-02T09:00:00Z,0,1
+T1002,2026-10-01T09:00:00Z,2026-10-02T16:00:00Z,completed,Tier2,BetaTeam,bob,critical,technical,2026-10-02T09:00:00Z,0,1
+T1003,2026-10-01T10:00:00Z,2026-10-01T10:00:00Z,created,Tier1,AlphaTeam,charlie,medium,general,2026-10-02T10:00:00Z,0,0
+T1003,2026-10-01T10:00:00Z,2026-10-01T12:00:00Z,completed,Tier1,AlphaTeam,charlie,medium,general,2026-10-02T10:00:00Z,0,0
+T1003,2026-10-01T10:00:00Z,2026-10-01T15:00:00Z,reopened,Tier1,AlphaTeam,charlie,medium,general,2026-10-02T10:00:00Z,1,0
+T1004,2026-10-01T11:00:00Z,2026-10-01T11:00:00Z,created,Escalations,BetaTeam,david,critical,security,2026-10-02T11:00:00Z,0,0
+T1004,2026-10-01T11:00:00Z,2026-10-01T11:30:00Z,in_progress,Escalations,BetaTeam,david,critical,security,2026-10-02T11:00:00Z,0,0
+T1005,2026-10-01T12:00:00Z,2026-10-01T12:00:00Z,created,Tier2,BetaTeam,eve,high,outage,2026-10-01T15:00:00Z,0,0
