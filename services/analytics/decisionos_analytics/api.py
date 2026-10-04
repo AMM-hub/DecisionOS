@@ -1942,6 +1942,3 @@ def create_app(data_dir: Path) -> FastAPI:
     app.state.store = store
     app.state.objects = objects
     return app
-
-
-

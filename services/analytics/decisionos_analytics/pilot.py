@@ -430,4 +430,3 @@ def analyze_workflow_mapping(
         "event_coverage": event_coverage,
         "known_limitations": known_limitations,
     }
-
