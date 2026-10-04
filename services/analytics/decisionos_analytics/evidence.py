@@ -7,6 +7,7 @@ and structured analytical fact representation.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -151,7 +152,6 @@ def capture_evidence(
     else:
         storage_format = "parquet"
         df_res = pl.DataFrame(rows)
-        import io
         buf = io.BytesIO()
         df_res.write_parquet(buf)
         parquet_bytes = buf.getvalue()
@@ -231,9 +231,8 @@ def get_evidence(
 
     # Re-verify canonical digest on retrieval
     current_digest = compute_canonical_digest(rows)
-    digest_valid = (current_digest == rec["canonical_digest"])
-    if not digest_valid:
-        quality_flags.append("integrity_mismatch")
+    if current_digest != rec["canonical_digest"]:
+        raise EvidenceError("integrity_mismatch", "Evidence payload failed canonical digest verification (tamper detected)")
 
     return {
         "artifact_id": rec["id"],
@@ -250,7 +249,7 @@ def get_evidence(
         "resolved_plan": resolved_plan,
         "query_params": query_params,
         "canonical_digest": rec["canonical_digest"],
-        "digest_verified": digest_valid,
+        "digest_verified": True,
         "storage_format": rec["storage_format"],
         "row_count": rec["row_count"],
         "exactness_class": rec["exactness_class"],

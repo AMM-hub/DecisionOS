@@ -739,12 +739,11 @@ def create_app(data_dir: Path) -> FastAPI:
         ctx(x_tenant, x_user)
         body = await request.json()
         from .register import (
-            DECISION_SCHEMA, CounterevidenceCheck, CounterevidenceState,
+            CounterevidenceCheck, CounterevidenceState,
             DecisionBrief, create_decision as _create,
         )
         try:
             conn = store.conn
-            conn.executescript(DECISION_SCHEMA)
             brief = DecisionBrief(**body["brief"])
             ce = [
                 CounterevidenceCheck(hypothesis=c["hypothesis"], state=CounterevidenceState(c["state"]), detail=c.get("detail"))
@@ -760,8 +759,7 @@ def create_app(data_dir: Path) -> FastAPI:
     async def list_decisions_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
-        from .register import DECISION_SCHEMA, list_decisions as _list
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import list_decisions as _list
         recs = _list(store.conn, x_tenant)
         return [_decision_to_dict(r) for r in recs]
 
@@ -769,8 +767,7 @@ def create_app(data_dir: Path) -> FastAPI:
     async def get_decision_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
-        from .register import DECISION_SCHEMA, get_decision as _get
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import get_decision as _get
         rec = _get(store.conn, x_tenant, decision_id)
         if rec is None:
             raise HTTPException(404, "not found")  # §23.4
@@ -781,14 +778,17 @@ def create_app(data_dir: Path) -> FastAPI:
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
         body = await request.json()
-        from .register import DECISION_SCHEMA, DecisionStatus, transition_status
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import transition_status
         try:
-            rec = transition_status(store.conn, x_tenant, decision_id, DecisionStatus(body["status"]), x_user, body.get("reason", ""))
+            status_val = body.get("status", "")
+            rec = transition_status(store.conn, x_tenant, decision_id, status_val, x_user, body.get("reason", ""))
         except LookupError as e:
             raise HTTPException(404, str(e))
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+            err_msg = str(e)
+            if "Invalid status transition" in err_msg:
+                raise HTTPException(409, json.dumps({"code": "invalid_transition", "detail": err_msg}))
+            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": err_msg}))
         store.audit(x_tenant, x_user, "decision.transition", decision_id, "success", {"to_status": body["status"]})
         return _decision_to_dict(rec)
 
@@ -797,8 +797,7 @@ def create_app(data_dir: Path) -> FastAPI:
         # ctx() validates both credentials and cross-tenant ownership (§23.4)
         ctx(x_tenant, x_user)
         body = await request.json()
-        from .register import DECISION_SCHEMA, OutcomeRecord, Verdict, record_outcome
-        store.conn.executescript(DECISION_SCHEMA)
+        from .register import OutcomeRecord, Verdict, record_outcome
         try:
             outcome = OutcomeRecord(
                 observed_results=body.get("observed_results", {}),
@@ -1128,7 +1127,9 @@ def create_app(data_dir: Path) -> FastAPI:
         try:
             return get_evidence(store, objects, tenant, evidence_id)
         except EvidenceError as e:
-            raise HTTPException(404, "not found")
+            if e.code == "evidence_not_found":
+                raise HTTPException(404, "not found")
+            return JSONResponse(status_code=409, content={"code": e.code, "detail": e.detail})
 
     # ---- investigations (D2, spec §10, §14, §15) --------------------------
     @app.post("/v1/investigations", status_code=201)

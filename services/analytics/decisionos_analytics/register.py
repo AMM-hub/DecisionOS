@@ -171,8 +171,8 @@ class DecisionRecord:
 
 DECISION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS decision (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL REFERENCES tenant(id),
+    id TEXT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     brief_json TEXT NOT NULL,
@@ -181,7 +181,8 @@ CREATE TABLE IF NOT EXISTS decision (
     outcome_json TEXT,
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_decision_tenant ON decision(tenant_id);
@@ -275,6 +276,11 @@ def transition_status(
             new_status = DecisionStatus(new_status)
         except ValueError:
             raise ValueError(f"Invalid status: '{new_status}'")
+
+    current_status = rec.status
+    allowed = VALID_TRANSITIONS.get(current_status, set())
+    if new_status not in allowed:
+        raise ValueError(f"Invalid status transition from '{current_status.value}' to '{new_status.value}'")
 
     ts = now_iso()
     old_status = rec.status.value

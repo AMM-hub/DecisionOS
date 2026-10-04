@@ -127,3 +127,102 @@ def test_evidence_api_flow_and_tenant_isolation(test_app):
         }
     )
     assert beta_create.status_code == 404
+
+
+def test_parquet_backed_evidence_retrieval_and_integrity(test_app):
+    client, store, objects = test_app
+    headers_alpha = {"X-Tenant": "tenant_alpha", "X-User": "alpha.manager"}
+
+    # 1. Setup tenant & investigation
+    store.conn.execute("INSERT OR IGNORE INTO tenant (id, name) VALUES ('tenant_alpha', 'Alpha')")
+    store.conn.commit()
+    store.conn.execute(
+        """INSERT INTO investigation (
+            tenant_id, id, title, question, source_type, owner, created_by, created_at, updated_at
+        ) VALUES ('tenant_alpha', 'inv-parquet-1', 'Surge Analysis', 'Why surge?', 'ad_hoc', 'alpha.manager', 'alpha.manager', ?, ?)""",
+        (now_iso(), now_iso())
+    )
+
+    # 2. Setup dataset with 150 rows (> 100 threshold for Parquet storage)
+    dataset_id = "ds-parquet-1"
+    store.conn.execute("INSERT OR IGNORE INTO workspace (tenant_id, id, name) VALUES ('tenant_alpha', 'ws-ops', 'Ops')")
+    store.conn.commit()
+    store.conn.execute(
+        "INSERT INTO dataset (tenant_id, id, workspace_id, name, published_revision, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("tenant_alpha", dataset_id, "ws-ops", "Parquet Dataset", 1, now_iso())
+    )
+    import io
+    buf = io.BytesIO()
+    timestamps = [f"2024-01-01T00:{i // 60:02d}:{i % 60:02d}Z" for i in range(150)]
+    df = pl.DataFrame({"timestamp": timestamps, "occupancy": [10] * 150})
+    df.write_parquet(buf)
+    obj_res = objects.put_revision_object("tenant_alpha", dataset_id, 1, "rev-1.parquet", buf.getvalue())
+    manifest = {"objects": [{"key": obj_res["key"]}]}
+
+    store.conn.execute(
+        "INSERT INTO dataset_revision (tenant_id, dataset_id, revision, state, manifest, row_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("tenant_alpha", dataset_id, 1, "published", json.dumps(manifest), 150, now_iso())
+    )
+    store.conn.execute(
+        "INSERT INTO definition (tenant_id, id, kind, created_by) VALUES (?, ?, ?, ?)",
+        ("tenant_alpha", "m_parquet", "count", "alpha.manager")
+    )
+    defn_content = {
+        "metric_id": "m_parquet",
+        "name": "Parquet Occupancy",
+        "kind": "count",
+        "expression": {"kind": "count", "predicates": []},
+        "eligibility": [],
+        "time_basis": "timestamp",
+        "timezone": "UTC",
+        "dataset_id": dataset_id,
+    }
+    store.conn.execute(
+        "INSERT INTO definition_version (tenant_id, definition_id, version, content, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("tenant_alpha", "m_parquet", 1, json.dumps(defn_content), "alpha.manager", now_iso())
+    )
+    store.conn.execute(
+        """INSERT INTO definition_publication (
+            tenant_id, definition_id, version, semantic_release_id, effective_from, published_at, approved_by, change_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("tenant_alpha", "m_parquet", 1, "rel-parquet", now_iso(), now_iso(), "alpha.manager", "initial")
+    )
+    store.conn.commit()
+
+    # 3. Create evidence with >100 rows using dimensions=["timestamp"] & limit=500
+    resp = client.post(
+        "/v1/evidence",
+        headers=headers_alpha,
+        json={
+            "investigation_id": "inv-parquet-1",
+            "metric_id": "m_parquet",
+            "evidence_type": "observed",
+            "support_status": "supporting",
+            "query_params": {
+                "dimensions": ["timestamp"],
+                "limit": 500,
+                "window": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}
+            }
+        }
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["storage_format"] == "parquet"
+    assert data["row_count"] == 150
+    ev_id = data["artifact_id"]
+
+    # Verify parquet_key is stored in DB
+    row = store.conn.execute("SELECT storage_format, parquet_key FROM evidence_artifact WHERE tenant_id='tenant_alpha' AND id=?", (ev_id,)).fetchone()
+    assert row["storage_format"] == "parquet"
+    assert row["parquet_key"] is not None
+
+    # 4. GET Evidence via API (re-reads parquet file from ObjectStore)
+    get_resp = client.get(f"/v1/evidence/{ev_id}", headers=headers_alpha)
+    assert get_resp.status_code == 200
+    get_data = get_resp.json()
+    assert get_data["artifact_id"] == ev_id
+    assert get_data["storage_format"] == "parquet"
+    assert get_data["digest_verified"] is True
+    assert len(get_data["results"]) == 150
+    # No local path leakage
+    assert "C:" not in json.dumps(get_data)

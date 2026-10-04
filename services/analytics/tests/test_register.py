@@ -24,8 +24,12 @@ from decisionos_analytics.register import (
     DecisionStatus,
     OutcomeRecord,
     Verdict,
+    BindingRole,
+    add_amendment,
+    bind_evidence,
     create_decision,
     get_decision,
+    list_decision_evidence,
     list_decisions,
     now_iso,
     record_outcome,
@@ -141,8 +145,77 @@ def test_transition_raises_on_missing(store):
 
 def test_transition_to_closed(store):
     rec = create_decision(store, "tenant_alpha", "Test", make_brief(), "alpha.manager")
+    rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.PROPOSED, "alpha.manager", "Proposing")
+    rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.ACCEPTED, "alpha.manager", "Accepting")
+    rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.ACTIVE, "alpha.manager", "Activating")
+    rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.EVALUATED, "alpha.manager", "Evaluated")
     rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.CLOSED, "alpha.manager", "Completed")
     assert rec.status == DecisionStatus.CLOSED
+
+
+def test_transition_state_machine_enforcement_and_sqlite_immutability(store):
+    """Test all valid transitions and verify invalid transitions fail without mutating DB."""
+    rec = create_decision(store, "tenant_alpha", "Test Transition Matrix", make_brief(), "alpha.manager")
+    did = rec.id
+
+    # 1. Representative invalid transitions from DRAFT
+    invalid_targets_from_draft = [
+        DecisionStatus.CLOSED,
+        DecisionStatus.EVALUATED,
+        DecisionStatus.ACTIVE,
+        DecisionStatus.IMPLEMENTATION_PENDING,
+    ]
+    for target in invalid_targets_from_draft:
+        with pytest.raises(ValueError, match="Invalid status transition"):
+            transition_status(store, "tenant_alpha", did, target, "user", "invalid")
+
+        # Verify status in SQLite remains unchanged (DRAFT)
+        db_rec = get_decision(store, "tenant_alpha", did)
+        assert db_rec.status == DecisionStatus.DRAFT
+
+    # 2. Valid transition DRAFT -> PROPOSED
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.PROPOSED, "user", "proposed")
+    assert rec.status == DecisionStatus.PROPOSED
+
+    # 3. Invalid reverse transition PROPOSED -> CLOSED
+    with pytest.raises(ValueError, match="Invalid status transition"):
+        transition_status(store, "tenant_alpha", did, DecisionStatus.CLOSED, "user", "invalid")
+    assert get_decision(store, "tenant_alpha", did).status == DecisionStatus.PROPOSED
+
+    # 4. Valid transition PROPOSED -> ACCEPTED
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.ACCEPTED, "user", "accepted")
+    assert rec.status == DecisionStatus.ACCEPTED
+
+    # 5. Invalid transition ACCEPTED -> DRAFT
+    with pytest.raises(ValueError, match="Invalid status transition"):
+        transition_status(store, "tenant_alpha", did, DecisionStatus.DRAFT, "user", "invalid")
+    assert get_decision(store, "tenant_alpha", did).status == DecisionStatus.ACCEPTED
+
+    # 6. Valid transition ACCEPTED -> IMPLEMENTATION_PENDING -> ACTIVE -> REVIEW_DUE -> EVALUATED -> CLOSED
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.IMPLEMENTATION_PENDING, "user", "imp")
+    assert rec.status == DecisionStatus.IMPLEMENTATION_PENDING
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.ACTIVE, "user", "active")
+    assert rec.status == DecisionStatus.ACTIVE
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.REVIEW_DUE, "user", "review")
+    assert rec.status == DecisionStatus.REVIEW_DUE
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.EVALUATED, "user", "eval")
+    assert rec.status == DecisionStatus.EVALUATED
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.CLOSED, "user", "closed")
+    assert rec.status == DecisionStatus.CLOSED
+
+    # 7. Invalid transition CLOSED -> DRAFT
+    with pytest.raises(ValueError, match="Invalid status transition"):
+        transition_status(store, "tenant_alpha", did, DecisionStatus.DRAFT, "user", "reopen")
+    assert get_decision(store, "tenant_alpha", did).status == DecisionStatus.CLOSED
+
+    # 8. Valid transition CLOSED -> SUPERSEDED
+    rec = transition_status(store, "tenant_alpha", did, DecisionStatus.SUPERSEDED, "user", "superseded")
+    assert rec.status == DecisionStatus.SUPERSEDED
+
+    # 9. Invalid transition SUPERSEDED -> DRAFT (SUPERSEDED is terminal)
+    with pytest.raises(ValueError, match="Invalid status transition"):
+        transition_status(store, "tenant_alpha", did, DecisionStatus.DRAFT, "user", "reopen")
+    assert get_decision(store, "tenant_alpha", did).status == DecisionStatus.SUPERSEDED
 
 
 # ---- outcome recording -----------------------------------------------------
@@ -171,6 +244,7 @@ def test_record_outcome(store):
 
 def test_record_outcome_preserves_prior_amendments(store):
     rec = create_decision(store, "tenant_alpha", "Test", make_brief(), "alpha.manager")
+    rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.PROPOSED, "alpha.manager", "Proposed")
     rec = transition_status(store, "tenant_alpha", rec.id, DecisionStatus.ACCEPTED, "alpha.manager", "Approved")
     outcome = OutcomeRecord(
         observed_results={}, measurement_window="2026-Q4",
@@ -180,7 +254,7 @@ def test_record_outcome_preserves_prior_amendments(store):
         study_run=None, data_quality_caveats=[],
     )
     updated = record_outcome(store, "tenant_alpha", rec.id, outcome, "alpha.manager", "Evaluated")
-    assert len(updated.amendments) == 2  # status change + outcome
+    assert len(updated.amendments) == 3  # status changes + outcome
 
 
 def test_record_outcome_raises_on_missing(store):
@@ -305,3 +379,39 @@ def test_decisions_api_tenant_isolation(client, alpha_headers, beta_headers):
 
     r = client.get(f"/v1/decisions/{did}", headers=beta_headers)
     assert r.status_code == 404  # §23.4: no cross-tenant disclosure
+
+
+def test_decision_schema_initialization_order_determinism(tmp_path):
+    """Verify Store init vs DECISION_SCHEMA init yields identical composite PRIMARY KEY (tenant_id, id)."""
+    import sqlite3
+    from decisionos_analytics.store import Store
+
+    db_store = tmp_path / "store_first.db"
+    db_schema = tmp_path / "schema_first.db"
+
+    # Sequence A: Store initializes first
+    store_a = Store(db_store)
+    info_a = store_a.conn.execute("PRAGMA table_info(decision)").fetchall()
+    pk_a = [col[1] for col in info_a if col[5] > 0]
+    store_a.conn.close()
+
+    # Sequence B: DECISION_SCHEMA executed first
+    conn_b = sqlite3.connect(db_schema)
+    conn_b.executescript(DECISION_SCHEMA)
+    info_b = conn_b.execute("PRAGMA table_info(decision)").fetchall()
+    pk_b = [col[1] for col in info_b if col[5] > 0]
+    conn_b.close()
+
+    # Must be deterministic and compound PRIMARY KEY (tenant_id, id)
+    assert pk_a == ["tenant_id", "id"]
+    assert pk_b == ["tenant_id", "id"]
+    assert pk_a == pk_b
+
+
+def test_missing_decision_lookup_errors(store):
+    with pytest.raises(LookupError, match="not found"):
+        list_decision_evidence(store, "tenant_alpha", "dec-missing-99")
+    with pytest.raises(LookupError, match="not found"):
+        bind_evidence(store, "tenant_alpha", "dec-missing-99", "ev-1", BindingRole.PRIMARY_SUPPORT, "user")
+    with pytest.raises(LookupError, match="not found"):
+        add_amendment(store, "tenant_alpha", "dec-missing-99", "author", "reason", "scope")

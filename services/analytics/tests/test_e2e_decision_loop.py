@@ -253,6 +253,8 @@ def test_digest_tamper_detection(test_env):
     )
     store.conn.commit()
 
-    # GET evidence detects digest mismatch & sets quality_flags or integrity status
-    res = client.get(f"/v1/evidence/{ev_id}", headers=headers).json()
-    assert "integrity_mismatch" in res["quality_flags"]
+    # GET evidence detects digest mismatch & rejects with 409 Conflict
+    r_tamper = client.get(f"/v1/evidence/{ev_id}", headers=headers)
+    assert r_tamper.status_code == 409
+    body_tamper = r_tamper.json()
+    assert body_tamper["code"] == "integrity_mismatch"

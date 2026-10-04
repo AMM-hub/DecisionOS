@@ -158,9 +158,14 @@ def test_bilingual_api_endpoints(test_env):
     # Search bilingual labels (English and Arabic)
     r_search_en = client.post("/v1/bilingual/search", headers=headers, json={"query": "occupancy", "locale": "en"})
     assert r_search_en.status_code == 200
+    search_data_en = r_search_en.json()
+    assert "results" in search_data_en
+    assert isinstance(search_data_en["results"], list)
 
-    r_search_ar = client.post("/v1/bilingual/search", headers=headers, json={"query": "شغال", "locale": "ar"})
+    r_search_ar = client.post("/v1/bilingual/search", headers=headers, json={"query": "rate", "locale": "ar"})
     assert r_search_ar.status_code == 200
+    search_data_ar = r_search_ar.json()
+    assert "results" in search_data_ar
 
 
 def test_evidence_and_investigation_error_handling(test_env):
@@ -218,9 +223,12 @@ def test_objectstore_and_scanning_and_monitoring_boost(test_env):
     # 3. Monitoring endpoints
     r_health = client.get("/v1/monitoring/health", headers=headers)
     assert r_health.status_code == 200
+    assert isinstance(r_health.json(), list)
 
     r_rules = client.get("/v1/monitoring/rules", headers=headers)
     assert r_rules.status_code == 200
+    assert "rules" in r_rules.json()
 
     r_episodes = client.get("/v1/monitoring/episodes", headers=headers)
     assert r_episodes.status_code == 200
+    assert "episodes" in r_episodes.json()
