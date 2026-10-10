@@ -1,18 +1,28 @@
 <template>
-  <div class="page">
+  <div class="investigation-detail-page">
     <div v-if="loading" class="loading">{{ t('common.loading', locale) }}</div>
     <div v-else-if="error" class="error-banner">{{ error }}</div>
     <div v-else-if="inv" class="inv-workspace">
       <!-- Breadcrumb / Header -->
-      <div class="header-row">
+      <div class="page-head" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap;">
         <div>
-          <NuxtLink to="/investigations" class="back-link">&larr; Investigations</NuxtLink>
-          <h1>{{ inv.title }}</h1>
-          <p class="question-title"><strong>Question:</strong> {{ inv.question }}</p>
+          <NuxtLink to="/investigations" class="back-link" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent); margin-bottom: 4px; font-weight: 550;">
+            &larr; {{ locale === 'ar' ? 'العودة للتحقيقات' : 'Back to Investigations' }}
+          </NuxtLink>
+          <div class="eyebrow" style="font-family: var(--font-mono); font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 2px;">
+            Track <span class="isolate">{{ inv.id }}</span>
+          </div>
+          <h1 style="font-size: 20px; font-weight: 700; color: var(--fg-strong); margin: 0;">{{ inv.title }}</h1>
+          <p class="muted" style="font-size: 13px; margin-top: 4px;">
+            <strong style="color: var(--fg);">Question:</strong> {{ inv.question }}
+          </p>
         </div>
-        <div class="status-actions">
-          <span :class="'badge badge-' + statusBadge(inv.status)">{{ inv.status }}</span>
-          <select class="status-select" v-model="selectedStatus" @change="updateStatus">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="chip" :data-tone="statusBadgeTone(inv.status)">
+            <span class="d"></span>
+            {{ inv.status }}
+          </span>
+          <select v-model="selectedStatus" @change="updateStatus" style="font-size: 12px; height: 32px; padding: 2px 8px;">
             <option value="open">open</option>
             <option value="in_progress">in_progress</option>
             <option value="resolved">resolved</option>
@@ -21,144 +31,174 @@
         </div>
       </div>
 
-      <!-- Main Overview Grid -->
-      <div class="grid cols-3 meta-grid">
-        <div class="card stat">
-          <span class="muted">Source</span>
-          <div class="n-sm"><code>{{ inv.source_type }}</code></div>
+      <!-- Main Overview KPI Strip -->
+      <div class="kpi-band" style="margin-bottom: 16px;">
+        <div class="kpi">
+          <div class="k-label"><span class="mark"></span> Source Type</div>
+          <div class="k-val isolate" style="font-size: 18px;">{{ inv.source_type }}</div>
+          <div class="k-foot">Origin classification</div>
         </div>
-        <div class="card stat">
-          <span class="muted">Owner</span>
-          <div class="n-sm">{{ inv.owner }}</div>
+        <div class="kpi">
+          <div class="k-label"><span class="mark"></span> Responsible Owner</div>
+          <div class="k-val isolate" style="font-size: 18px;">{{ inv.owner }}</div>
+          <div class="k-foot">Operational lead</div>
         </div>
-        <div class="card stat">
-          <span class="muted">Created</span>
-          <div class="n-sm">{{ formatDate(inv.created_at) }}</div>
+        <div class="kpi">
+          <div class="k-label"><span class="mark"></span> Created Date</div>
+          <div class="k-val isolate" style="font-size: 18px;">{{ formatDate(inv.created_at) }}</div>
+          <div class="k-foot">Audit entry stamp</div>
+        </div>
+        <div class="kpi" :data-tone="inv.evidence?.length ? 'ok' : 'warn'">
+          <div class="k-label"><span class="mark"></span> Evidence Artifacts</div>
+          <div class="k-val isolate" style="font-size: 22px;">{{ inv.evidence?.length ?? 0 }}</div>
+          <div class="k-foot">{{ inv.claims?.length ?? 0 }} claims formulated</div>
         </div>
       </div>
 
       <!-- Alternative Explanations -->
-      <div v-if="inv.alternative_explanations?.length" class="card">
-        <h3>Alternative Explanations Under Investigation</h3>
-        <ul>
-          <li v-for="(exp, idx) in inv.alternative_explanations" :key="idx">{{ exp }}</li>
-        </ul>
+      <div v-if="inv.alternative_explanations?.length" class="panel" style="margin-bottom: 16px;">
+        <div class="panel-head">
+          <h3 style="font-size: 13.5px; margin: 0;">Alternative Explanations Under Investigation</h3>
+        </div>
+        <div class="panel-body">
+          <ul style="margin: 0; padding-inline-start: 18px; font-size: 13px; color: var(--fg);">
+            <li v-for="(exp, idx) in inv.alternative_explanations" :key="idx" style="margin-bottom: 4px;">{{ exp }}</li>
+          </ul>
+        </div>
       </div>
 
       <!-- Structured Claims Section -->
-      <div class="section-header">
-        <h2>{{ t('investigations.claims', locale) }} ({{ inv.claims?.length ?? 0 }})</h2>
-        <button class="btn btn-sm" @click="showAddClaimModal = true">{{ t('investigations.addClaim', locale) }}</button>
-      </div>
-
-      <div v-if="!inv.claims || inv.claims.length === 0" class="card empty-card">
-        <p class="muted">No structured claims registered for this investigation yet.</p>
-      </div>
-      <div v-else class="grid">
-        <div v-for="claim in inv.claims" :key="claim.id" class="card claim-card">
-          <div class="card-header">
-            <strong>{{ claim.statement }}</strong>
-            <div class="row">
-              <span class="badge badge-outline">{{ claim.evidence_type }}</span>
-              <span :class="'badge badge-' + supportBadge(claim.support_status)">{{ claim.support_status }}</span>
-            </div>
+      <div class="panel" style="margin-bottom: 16px;">
+        <div class="panel-head">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h3 style="font-size: 13.5px; margin: 0;">{{ t('investigations.claims', locale) }}</h3>
+            <span class="chip">{{ inv.claims?.length ?? 0 }}</span>
           </div>
-          <div class="card-body">
-            <div v-if="claim.structured_fact" class="fact-box">
-              <span class="muted">Fact Reference:</span>
-              <code>{{ claim.structured_fact.metric_id }}</code> =
-              <strong>{{ claim.structured_fact.value }} {{ claim.structured_fact.unit || '' }}</strong>
-            </div>
-            <div v-if="claim.quality_flags?.length" class="row quality-flags">
-              <span v-for="flag in claim.quality_flags" :key="flag" class="badge badge-warn">{{ flag }}</span>
+          <button class="btn btn-secondary btn-sm" @click="showAddClaimModal = true">
+            + {{ t('investigations.addClaim', locale) }}
+          </button>
+        </div>
+        <div class="panel-body">
+          <div v-if="!inv.claims || inv.claims.length === 0" style="padding: 18px; text-align: center;">
+            <p class="muted" style="font-size: 13px;">No structured claims registered for this investigation yet.</p>
+          </div>
+          <div v-else style="display: flex; flex-direction: column; gap: 10px;">
+            <div v-for="claim in inv.claims" :key="claim.id" class="panel" style="margin-bottom: 0; background: var(--surface-2); border-color: var(--border);">
+              <div class="panel-head" style="padding: 8px 12px; background: transparent;">
+                <div style="font-weight: 600; color: var(--fg-strong); font-size: 13px;">{{ claim.statement }}</div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <span class="chip">{{ claim.evidence_type }}</span>
+                  <span class="chip" :data-tone="supportBadgeTone(claim.support_status)">{{ claim.support_status }}</span>
+                </div>
+              </div>
+              <div class="panel-body" style="padding: 10px 12px;">
+                <div v-if="claim.structured_fact" style="background: var(--surface); padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--border); font-size: 12.5px; margin-bottom: 6px;">
+                  <span class="muted">Fact Reference:</span>
+                  <code class="isolate" style="margin: 0 4px;">{{ claim.structured_fact.metric_id }}</code> =
+                  <strong class="isolate num">{{ claim.structured_fact.value }} {{ claim.structured_fact.unit || '' }}</strong>
+                </div>
+                <div v-if="claim.quality_flags?.length" style="display: flex; gap: 6px; flex-wrap: wrap;">
+                  <span v-for="flag in claim.quality_flags" :key="flag" class="chip" data-tone="warn">{{ flag }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Immutable Evidence Artifacts Section -->
-      <div class="section-header">
-        <h2>{{ t('investigations.evidence', locale) }} ({{ inv.evidence?.length ?? 0 }})</h2>
-        <button class="btn btn-sm" @click="showCaptureEvidenceModal = true">{{ t('investigations.captureEvidence', locale) }}</button>
-      </div>
-
-      <div v-if="!inv.evidence || inv.evidence.length === 0" class="card empty-card">
-        <p class="muted">No evidence artifacts captured for this investigation yet.</p>
-      </div>
-      <div v-else class="grid">
-        <div v-for="ev in inv.evidence" :key="ev.artifact_id" class="card ev-card">
-          <div class="card-header">
-            <div>
-              <strong>Artifact {{ ev.artifact_id }}</strong>
-              <div class="row text-xs muted">
-                <span>Metric: <code>{{ ev.metric_id }}</code></span> &middot;
-                <span>Dataset: <code>{{ ev.dataset_id }}</code> r#{{ ev.dataset_revision }}</span>
-              </div>
-            </div>
-            <div class="row">
-              <span class="badge badge-outline">{{ ev.evidence_type }}</span>
-              <span :class="'badge badge-' + supportBadge(ev.support_status)">{{ ev.support_status }}</span>
-            </div>
+      <div class="panel" style="margin-bottom: 16px;">
+        <div class="panel-head">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h3 style="font-size: 13.5px; margin: 0;">{{ t('investigations.evidence', locale) }}</h3>
+            <span class="chip">{{ inv.evidence?.length ?? 0 }}</span>
           </div>
-
-          <div class="card-body">
-            <div class="grid cols-3 ev-meta-grid">
-              <div><span class="muted">Exactness:</span> <code>{{ ev.exactness_class }}</code></div>
-              <div><span class="muted">Reproducibility:</span> <code>{{ ev.reproducibility_status }}</code></div>
-              <div><span class="muted">Row Count:</span> <strong>{{ ev.row_count }}</strong></div>
-            </div>
-
-            <!-- Quality Flags -->
-            <div v-if="ev.quality_flags?.length" class="row quality-flags margin-y">
-              <span class="muted">Quality Flags:</span>
-              <span v-for="flag in ev.quality_flags" :key="flag" class="badge badge-warn">{{ flag }}</span>
-            </div>
-
-            <!-- Expandable Provenance Details -->
-            <details class="provenance-details">
-              <summary>Provenance & Integrity Details</summary>
-              <div class="provenance-content">
-                <div class="digest-row">
-                  <span class="muted">Canonical Digest:</span>
-                  <code class="digest-hash">{{ ev.canonical_digest }}</code>
-                  <span class="badge badge-green">Integrity Verified</span>
+          <button class="btn btn-secondary btn-sm" @click="showCaptureEvidenceModal = true">
+            + {{ t('investigations.captureEvidence', locale) }}
+          </button>
+        </div>
+        <div class="panel-body">
+          <div v-if="!inv.evidence || inv.evidence.length === 0" style="padding: 18px; text-align: center;">
+            <p class="muted" style="font-size: 13px;">No evidence artifacts captured for this investigation yet.</p>
+          </div>
+          <div v-else style="display: flex; flex-direction: column; gap: 12px;">
+            <div v-for="ev in inv.evidence" :key="ev.artifact_id" class="panel" style="margin-bottom: 0; background: var(--surface-2); border-color: var(--border);">
+              <div class="panel-head" style="padding: 10px 14px; background: transparent;">
+                <div>
+                  <div style="font-weight: 600; color: var(--fg-strong); font-size: 13px;">
+                    Artifact <span class="isolate mono">{{ ev.artifact_id }}</span>
+                  </div>
+                  <div class="muted isolate" style="font-size: 11.5px; margin-top: 2px;">
+                    Metric: <code>{{ ev.metric_id }}</code> &middot; Dataset: <code>{{ ev.dataset_id }}</code> r#{{ ev.dataset_revision }}
+                  </div>
                 </div>
-                <div class="row text-xs muted margin-y">
-                  <span>Storage: {{ ev.storage_format }}</span> &middot;
-                  <span>Created By: {{ ev.created_by }}</span> &middot;
-                  <span>Created At: {{ formatDate(ev.created_at) }}</span>
-                </div>
-                <div v-if="ev.payload_json" class="payload-box">
-                  <span class="muted">Stored Payload Snippet:</span>
-                  <pre>{{ ev.payload_json }}</pre>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <span class="chip">{{ ev.evidence_type }}</span>
+                  <span class="chip" :data-tone="supportBadgeTone(ev.support_status)">{{ ev.support_status }}</span>
                 </div>
               </div>
-            </details>
+
+              <div class="panel-body" style="padding: 12px 14px;">
+                <div class="grid cols-3" style="font-size: 12px; margin-bottom: 8px;">
+                  <div><span class="muted">Exactness:</span> <code class="isolate">{{ ev.exactness_class }}</code></div>
+                  <div><span class="muted">Reproducibility:</span> <code class="isolate">{{ ev.reproducibility_status }}</code></div>
+                  <div><span class="muted">Row Count:</span> <strong class="isolate num">{{ ev.row_count }}</strong></div>
+                </div>
+
+                <!-- Quality Flags -->
+                <div v-if="ev.quality_flags?.length" style="display: flex; gap: 6px; align-items: center; margin-bottom: 8px;">
+                  <span class="muted" style="font-size: 12px;">Quality Flags:</span>
+                  <span v-for="flag in ev.quality_flags" :key="flag" class="chip" data-tone="warn">{{ flag }}</span>
+                </div>
+
+                <!-- Expandable Provenance Details -->
+                <details style="margin-top: 8px; border-top: 1px dashed var(--border-strong); padding-top: 8px; font-size: 12px;">
+                  <summary style="cursor: pointer; color: var(--muted); font-weight: 550;">Provenance &amp; Cryptographic Integrity</summary>
+                  <div style="background: var(--surface); padding: 10px; border-radius: var(--r-sm); border: 1px solid var(--border); margin-top: 6px;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px;">
+                      <span class="muted">Canonical Digest:</span>
+                      <code class="isolate" style="word-break: break-all; font-size: 11px;">{{ ev.canonical_digest }}</code>
+                      <span class="chip" data-tone="ok">Integrity Verified</span>
+                    </div>
+                    <div class="faint isolate" style="font-size: 11px; margin-bottom: 6px;">
+                      Storage: {{ ev.storage_format }} &middot; Created By: {{ ev.created_by }} &middot; Created At: {{ formatDate(ev.created_at) }}
+                    </div>
+                    <div v-if="ev.payload_json" style="margin-top: 6px;">
+                      <span class="muted" style="font-size: 11px;">Stored Payload Snippet:</span>
+                      <pre class="isolate" style="font-family: var(--font-mono); font-size: 11px; background: var(--surface-3); color: var(--fg); padding: 8px; border-radius: 4px; overflow-x: auto; margin: 4px 0 0 0;">{{ ev.payload_json }}</pre>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Action Footer: Create Decision Brief -->
-      <div class="footer-actions card">
+      <div class="panel" style="background: var(--accent-soft); border-color: var(--accent-line); padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
         <div>
-          <h3>Ready to turn findings into a Decision?</h3>
-          <p class="muted">Initialize a Decision Brief with evidence gathered during this investigation.</p>
+          <h3 style="font-size: 14.5px; font-weight: 650; color: var(--fg-strong); margin: 0;">Ready to turn findings into a Decision?</h3>
+          <p class="muted" style="font-size: 12.5px; margin-top: 2px;">
+            Initialize a formalized Decision Brief with all verified evidence gathered in this investigation.
+          </p>
         </div>
-        <button class="btn btn-primary" @click="createDecisionFromInv">
-          {{ t('investigations.convertDecision', locale) }}
+        <button class="btn btn-primary btn-sm" @click="createDecisionFromInv">
+          <svg><use href="#i-check-square"/></svg>
+          <span>{{ t('investigations.convertDecision', locale) }}</span>
         </button>
       </div>
 
       <!-- Add Claim Modal -->
       <div v-if="showAddClaimModal" class="modal-backdrop" @click.self="showAddClaimModal = false">
-        <div class="modal card">
-          <h2>Add Structured Claim</h2>
+        <div class="modal">
+          <h2 style="font-size: 16px; font-weight: 650; margin-bottom: 14px; color: var(--fg-strong);">Add Structured Claim</h2>
           <form @submit.prevent="submitClaim">
             <label class="field">
               <span>{{ t('investigations.statement', locale) }}</span>
-              <textarea v-model="claimForm.statement" required placeholder="e.g. ICU stay duration increased by 2.4 hours" />
+              <textarea v-model="claimForm.statement" required rows="2" placeholder="e.g. ICU stay duration increased by 2.4 hours" />
             </label>
-            <div class="row">
+            <div class="grid cols-2" style="gap: 10px;">
               <label class="field">
                 <span>{{ t('investigations.evidenceType', locale) }}</span>
                 <select v-model="claimForm.evidence_type">
@@ -179,26 +219,26 @@
                 </select>
               </label>
             </div>
-            <fieldset class="fact-fieldset">
-              <legend>Structured Fact (Optional)</legend>
-              <div class="row">
-                <label class="field">
+            <fieldset style="border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; margin: 10px 0;">
+              <legend style="font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 0 4px;">Structured Fact (Optional)</legend>
+              <div class="grid cols-3" style="gap: 8px;">
+                <label class="field" style="margin: 0;">
                   <span>Metric ID</span>
                   <input v-model="claimForm.structured_fact.metric_id" placeholder="m_icu_stay" />
                 </label>
-                <label class="field">
+                <label class="field" style="margin: 0;">
                   <span>Value</span>
                   <input v-model="claimForm.structured_fact.value" placeholder="2.4" />
                 </label>
-                <label class="field">
+                <label class="field" style="margin: 0;">
                   <span>Unit</span>
                   <input v-model="claimForm.structured_fact.unit" placeholder="hours" />
                 </label>
               </div>
             </fieldset>
-            <div class="modal-actions">
-              <button type="button" class="btn secondary" @click="showAddClaimModal = false">{{ t('common.cancel', locale) }}</button>
-              <button type="submit" class="btn btn-primary">{{ t('common.save', locale) }}</button>
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+              <button type="button" class="btn btn-secondary btn-sm" @click="showAddClaimModal = false">{{ t('common.cancel', locale) }}</button>
+              <button type="submit" class="btn btn-primary btn-sm">{{ t('common.save', locale) }}</button>
             </div>
           </form>
         </div>
@@ -206,14 +246,14 @@
 
       <!-- Capture Evidence Modal -->
       <div v-if="showCaptureEvidenceModal" class="modal-backdrop" @click.self="showCaptureEvidenceModal = false">
-        <div class="modal card">
-          <h2>Capture Certified Metric Evidence</h2>
+        <div class="modal">
+          <h2 style="font-size: 16px; font-weight: 650; margin-bottom: 14px; color: var(--fg-strong);">Capture Certified Metric Evidence</h2>
           <form @submit.prevent="submitEvidenceCapture">
             <label class="field">
               <span>Metric ID</span>
               <input v-model="evidenceForm.metric_id" required placeholder="m_occupancy" />
             </label>
-            <div class="row">
+            <div class="grid cols-2" style="gap: 10px;">
               <label class="field">
                 <span>Evidence Type</span>
                 <select v-model="evidenceForm.evidence_type">
@@ -231,9 +271,9 @@
                 </select>
               </label>
             </div>
-            <div class="modal-actions">
-              <button type="button" class="btn secondary" @click="showCaptureEvidenceModal = false">{{ t('common.cancel', locale) }}</button>
-              <button type="submit" class="btn btn-primary">Capture Snapshot</button>
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+              <button type="button" class="btn btn-secondary btn-sm" @click="showCaptureEvidenceModal = false">{{ t('common.cancel', locale) }}</button>
+              <button type="submit" class="btn btn-primary btn-sm">Capture Snapshot</button>
             </div>
           </form>
         </div>
@@ -278,12 +318,22 @@ const evidenceForm = ref({
   support_status: 'supporting',
 })
 
-function statusBadge(status: string): string {
-  return ({ open: 'yellow', in_progress: 'blue', resolved: 'green', closed: 'gray' } as Record<string, string>)[status] || 'gray'
+function statusBadgeTone(status: string): string {
+  switch (status) {
+    case 'resolved': return 'ok'
+    case 'in_progress': return 'accent'
+    case 'open': return 'warn'
+    default: return 'muted'
+  }
 }
 
-function supportBadge(status: string): string {
-  return ({ supporting: 'green', counter: 'red', neutral: 'gray', unverified: 'yellow' } as Record<string, string>)[status] || 'gray'
+function supportBadgeTone(status: string): string {
+  switch (status) {
+    case 'supporting': return 'ok'
+    case 'counter': return 'crit'
+    case 'unverified': return 'warn'
+    default: return 'muted'
+  }
 }
 
 function formatDate(iso: string): string {
@@ -372,36 +422,3 @@ onMounted(() => {
   loadInvestigation()
 })
 </script>
-
-<style scoped>
-.page { max-width: 1100px; margin: 0 auto; padding: 1rem; }
-.back-link { font-size: 0.9rem; color: #0f766e; text-decoration: none; margin-bottom: 0.5rem; display: inline-block; }
-.header-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; }
-.question-title { font-size: 1.1rem; color: #334155; margin: 0.5rem 0 0 0; }
-.status-actions { display: flex; align-items: center; gap: 0.5rem; }
-.status-select { font-size: 0.85rem; padding: 0.2rem 0.4rem; }
-.n-sm { font-size: 1.1rem; font-weight: 600; }
-.meta-grid { margin-bottom: 1.5rem; }
-.section-header { display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0 0.75rem 0; }
-.claim-card, .ev-card { margin-bottom: 0.75rem; }
-.empty-card { padding: 1.5rem; text-align: center; }
-.fact-box { background: #f8fafc; padding: 0.5rem 0.75rem; border-radius: 4px; border: 1px solid #e2e8f0; font-size: 0.9rem; margin-top: 0.4rem; }
-.quality-flags { margin-top: 0.4rem; gap: 0.3rem; }
-.ev-meta-grid { font-size: 0.85rem; padding: 0.4rem 0; }
-.provenance-details { margin-top: 0.5rem; border-top: 1px dashed #cbd5e1; padding-top: 0.5rem; font-size: 0.85rem; }
-.provenance-content { background: #f8fafc; padding: 0.75rem; border-radius: 6px; margin-top: 0.4rem; }
-.digest-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.digest-hash { font-family: monospace; word-break: break-all; max-width: 100%; }
-.payload-box pre { font-size: 0.8rem; background: #0f172a; color: #e2e8f0; padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
-.footer-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 2rem; background: #f0fdf4; border-color: #bbf7d0; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal { background: #fff; width: 100%; max-width: 550px; padding: 1.5rem; border-radius: 8px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
-.fact-fieldset { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.75rem; margin: 0.75rem 0; }
-.badge-green { background: #dcfce7; color: #166534; }
-.badge-yellow { background: #fef9c3; color: #854d0e; }
-.badge-blue { background: #dbeafe; color: #1e40af; }
-.badge-red { background: #fee2e2; color: #991b1b; }
-.badge-gray { background: #f1f5f9; color: #475569; }
-.badge-outline { border: 1px solid #cbd5e1; background: transparent; }
-</style>

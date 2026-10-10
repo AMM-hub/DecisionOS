@@ -1,30 +1,56 @@
 <template>
-  <div class="page">
-    <h1>Monitoring &amp; Alerts</h1>
-    <p class="muted">Data health, contextual anomaly detection, and alert lifecycle (spec §14).</p>
+  <div class="monitoring-page">
+    <div class="page-head">
+      <div class="titles">
+        <div class="eyebrow">Continuous Signal</div>
+        <h1>Monitoring &amp; Alerts</h1>
+        <p class="desc">Data health, contextual anomaly detection, and alert lifecycle (spec §14).</p>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary btn-sm" @click="refreshAll">
+          <svg><use href="#i-pulse"/></svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </div>
 
-    <div class="tabs">
-      <button v-for="tab in tabs" :key="tab.id" :class="{ active: activeTab === tab.id }"
-              @click="activeTab = tab.id">{{ tab.label }}</button>
+    <!-- Segmented Navigation Tabs -->
+    <div class="segmented" style="margin-bottom: 16px;">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        :aria-pressed="activeTab === tab.id"
+        @click="activeTab = tab.id"
+      >
+        {{ tab.label }}
+      </button>
     </div>
 
     <!-- Data Health Tab -->
-    <div v-if="activeTab === 'health'" class="tab-content">
+    <div v-if="activeTab === 'health'">
       <div v-if="healthLoading" class="loading">Loading health status...</div>
       <div v-else-if="healthError" class="error-banner">{{ healthError }}</div>
-      <div v-else>
-        <div v-for="ds in healthData" :key="ds.dataset_id" class="card">
-          <div class="card-header">
-            <strong>{{ ds.dataset_id }}</strong>
-            <span :class="'badge badge-' + healthBadgeClass(ds.status)">{{ ds.status }}</span>
+      <div v-else class="grid grid-2">
+        <div v-for="ds in healthData" :key="ds.dataset_id" class="panel">
+          <div class="panel-head">
+            <h3 class="mono isolate" style="font-size: 13.5px; margin: 0;">{{ ds.dataset_id }}</h3>
+            <span class="chip" :data-tone="healthBadgeTone(ds.status)">
+              <span class="d"></span>
+              {{ ds.status }}
+            </span>
           </div>
-          <div class="card-body">
-            <table class="meta-table">
-              <tr><td>Freshness</td><td>{{ ds.freshness_hours != null ? ds.freshness_hours + 'h' : '—' }}</td></tr>
-              <tr><td>Revisions</td><td>{{ ds.revision_count }}</td></tr>
-              <tr><td>Latest</td><td>#{{ ds.latest_revision }}</td></tr>
-              <tr><td>Last Ingested</td><td>{{ ds.last_ingested_at ? formatDate(ds.last_ingested_at) : '—' }}</td></tr>
-            </table>
+          <div class="panel-body">
+            <div class="kv" style="display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 12.5px;">
+              <span class="muted">Freshness:</span>
+              <span class="isolate mono">{{ ds.freshness_hours != null ? ds.freshness_hours + 'h' : '—' }}</span>
+              <span class="muted">Revisions:</span>
+              <span class="isolate mono">{{ ds.revision_count }}</span>
+              <span class="muted">Latest Revision:</span>
+              <span class="isolate mono">#{{ ds.latest_revision }}</span>
+              <span class="muted">Last Ingested:</span>
+              <span class="faint">{{ ds.last_ingested_at ? formatDate(ds.last_ingested_at) : '—' }}</span>
+            </div>
           </div>
         </div>
         <p v-if="healthData.length === 0" class="muted">No datasets found.</p>
@@ -32,48 +58,80 @@
     </div>
 
     <!-- Alert Rules Tab -->
-    <div v-if="activeTab === 'rules'" class="tab-content">
-      <button class="btn btn-sm" @click="showNewRuleForm = !showNewRuleForm">
-        {{ showNewRuleForm ? 'Cancel' : '+ New Rule' }}
-      </button>
+    <div v-if="activeTab === 'rules'">
+      <div style="margin-bottom: 12px; display: flex; justify-content: flex-end;">
+        <button class="btn btn-secondary btn-sm" @click="showNewRuleForm = !showNewRuleForm">
+          {{ showNewRuleForm ? 'Cancel' : '+ New Rule' }}
+        </button>
+      </div>
 
-      <div v-if="showNewRuleForm" class="card rule-form">
-        <h3>Create Alert Rule</h3>
-        <div class="form-row">
-          <label>Name <input v-model="newRule.name" placeholder="e.g. First-response SLA" /></label>
-          <label>Dataset ID <input v-model="newRule.dataset_id" placeholder="dataset id" /></label>
-          <label>Metric ID <input v-model="newRule.metric_id" placeholder="metric id" /></label>
+      <!-- New Rule Form Panel -->
+      <div v-if="showNewRuleForm" class="panel" style="margin-bottom: 16px;">
+        <div class="panel-head">
+          <h3>Create Alert Rule</h3>
         </div>
-        <div class="form-row">
-          <label>Method <select v-model="newRule.method">
-            <option>seasonal_naive</option>
-            <option>residual_detection</option>
-          </select></label>
-          <label>Threshold <input v-model.number="newRule.threshold" type="number" step="0.1" /></label>
-          <label>Persistence <input v-model.number="newRule.persistence" type="number" min="1" /></label>
+        <div class="panel-body">
+          <div class="grid grid-3">
+            <label class="field">
+              <span>Rule Name</span>
+              <input v-model="newRule.name" class="input" placeholder="e.g. First-response SLA" />
+            </label>
+            <label class="field">
+              <span>Dataset ID</span>
+              <input v-model="newRule.dataset_id" class="input" placeholder="dataset id" />
+            </label>
+            <label class="field">
+              <span>Metric ID</span>
+              <input v-model="newRule.metric_id" class="input" placeholder="metric id" />
+            </label>
+          </div>
+          <div class="grid grid-3" style="margin-top: 10px;">
+            <label class="field">
+              <span>Method</span>
+              <select v-model="newRule.method" class="select">
+                <option value="seasonal_naive">seasonal_naive</option>
+                <option value="residual_detection">residual_detection</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Threshold</span>
+              <input v-model.number="newRule.threshold" class="input" type="number" step="0.1" />
+            </label>
+            <label class="field">
+              <span>Persistence</span>
+              <input v-model.number="newRule.persistence" class="input" type="number" min="1" />
+            </label>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center; margin-top: 14px;">
+            <button class="btn btn-primary btn-sm" @click="createRule">Create Rule</button>
+            <span v-if="ruleError" style="color: var(--crit-ink); font-size: 12px;">{{ ruleError }}</span>
+          </div>
         </div>
-        <button class="btn" @click="createRule">Create</button>
-        <span v-if="ruleError" class="error-text">{{ ruleError }}</span>
       </div>
 
       <div v-if="rulesLoading" class="loading">Loading rules...</div>
-      <div v-else>
-        <div v-for="rule in rules" :key="rule.id" class="card">
-          <div class="card-header">
-            <strong>{{ rule.name }}</strong>
-            <span :class="'badge badge-' + (rule.enabled ? 'green' : 'gray')">
+      <div v-else class="grid grid-2">
+        <div v-for="rule in rules" :key="rule.id" class="panel">
+          <div class="panel-head">
+            <h3 style="font-size: 13.5px; margin: 0;">{{ rule.name }}</h3>
+            <span class="chip" :data-tone="rule.enabled ? 'ok' : ''">
+              <span class="d"></span>
               {{ rule.enabled ? 'Enabled' : 'Disabled' }}
             </span>
           </div>
-          <div class="card-body">
-            <span class="muted">Dataset:</span> {{ rule.dataset_id }} &middot;
-            <span class="muted">Metric:</span> {{ rule.metric_id }} &middot;
-            <span class="muted">Method:</span> {{ rule.method }} &middot;
-            <span class="muted">Threshold:</span> {{ rule.threshold }} &middot;
-            <span class="muted">Owner:</span> {{ rule.owner }}
-            <div class="actions">
-              <button class="btn btn-xs" @click="toggleRule(rule)">{{ rule.enabled ? 'Disable' : 'Enable' }}</button>
-              <button class="btn btn-xs" @click="evaluateRule(rule.id)">Evaluate</button>
+          <div class="panel-body" style="font-size: 12.5px;">
+            <div style="margin-bottom: 8px;">
+              <span class="muted">Dataset:</span> <code class="isolate">{{ rule.dataset_id }}</code> &middot;
+              <span class="muted">Metric:</span> <code class="isolate">{{ rule.metric_id }}</code> &middot;
+              <span class="muted">Threshold:</span> <strong class="mono isolate">{{ rule.threshold }}</strong>
+            </div>
+            <div class="row" style="margin-top: 12px; gap: 8px;">
+              <button class="btn btn-secondary btn-xs" @click="toggleRule(rule)">
+                {{ rule.enabled ? 'Disable' : 'Enable' }}
+              </button>
+              <button class="btn btn-primary btn-xs" @click="evaluateRule(rule.id)">
+                Evaluate Now
+              </button>
             </div>
           </div>
         </div>
@@ -82,61 +140,72 @@
     </div>
 
     <!-- Active Episodes Tab -->
-    <div v-if="activeTab === 'episodes'" class="tab-content">
+    <div v-if="activeTab === 'episodes'">
       <div v-if="episodesLoading" class="loading">Loading episodes...</div>
-      <div v-else>
-        <div v-for="ep in episodeList" :key="ep.id" class="card">
-          <div class="card-header">
-            <strong>Episode {{ ep.id.substring(0, 8) }}…</strong>
-            <span :class="'badge badge-' + episodeBadgeClass(ep.workflow_status)">{{ ep.workflow_status }}</span>
+      <div v-else class="grid grid-2">
+        <div v-for="ep in episodeList" :key="ep.id" class="panel">
+          <div class="panel-head">
+            <strong class="mono isolate">Episode {{ ep.id.substring(0, 8) }}…</strong>
+            <span class="chip" :data-tone="episodeBadgeTone(ep.workflow_status)">
+              <span class="d"></span>
+              {{ ep.workflow_status }}
+            </span>
           </div>
-          <div class="card-body">
-            <table class="meta-table">
-              <tr><td>Rule</td><td>{{ ep.rule_id.substring(0, 8) }}…</td></tr>
-              <tr><td>Observed</td><td>{{ ep.observed_value }}</td></tr>
-              <tr><td>Expected Range</td><td>[{{ ep.expected_lower }}, {{ ep.expected_upper }}]</td></tr>
-              <tr><td>Method</td><td>{{ ep.scoring_method }}</td></tr>
-              <tr><td>Effect Size</td><td>{{ ep.effect_size }}</td></tr>
-              <tr><td>Started</td><td>{{ formatDate(ep.started_at) }}</td></tr>
-            </table>
-            <div v-if="canTransition(ep.workflow_status)" class="actions">
-              <button class="btn btn-xs btn-primary" @click="launchInvestigation(ep.id)">
+          <div class="panel-body">
+            <div class="kv" style="display: grid; grid-template-columns: 130px 1fr; gap: 5px 12px; font-size: 12px;">
+              <span class="muted">Rule:</span> <span class="mono isolate">{{ ep.rule_id.substring(0, 8) }}…</span>
+              <span class="muted">Observed Value:</span> <strong class="mono isolate">{{ ep.observed_value }}</strong>
+              <span class="muted">Expected Range:</span> <span class="mono isolate">[{{ ep.expected_lower }}, {{ ep.expected_upper }}]</span>
+              <span class="muted">Scoring Method:</span> <span>{{ ep.scoring_method }}</span>
+              <span class="muted">Started:</span> <span class="faint">{{ formatDate(ep.started_at) }}</span>
+            </div>
+
+            <div v-if="canTransition(ep.workflow_status)" class="row" style="margin-top: 12px; gap: 6px;">
+              <button class="btn btn-primary btn-xs" @click="launchInvestigation(ep.id)">
                 Launch Investigation
               </button>
-              <button v-if="ep.workflow_status === 'open'" class="btn btn-xs"
-                      @click="transitionEpisode(ep.id, 'acknowledged')">Acknowledge</button>
-              <button v-if="ep.workflow_status === 'acknowledged'" class="btn btn-xs"
-                      @click="transitionEpisode(ep.id, 'investigating')">Investigate</button>
-              <button v-if="ep.workflow_status !== 'resolved' && ep.workflow_status !== 'dismissed'" class="btn btn-xs"
-                      @click="transitionEpisode(ep.id, 'resolved')">Resolve</button>
-              <button v-if="ep.workflow_status !== 'dismissed' && ep.workflow_status !== 'resolved'" class="btn btn-xs"
-                      @click="transitionEpisode(ep.id, 'dismissed')">Dismiss</button>
+              <button v-if="ep.workflow_status === 'open'" class="btn btn-secondary btn-xs" @click="transitionEpisode(ep.id, 'acknowledged')">
+                Acknowledge
+              </button>
+              <button v-if="ep.workflow_status === 'acknowledged'" class="btn btn-secondary btn-xs" @click="transitionEpisode(ep.id, 'investigating')">
+                Investigate
+              </button>
+              <button v-if="ep.workflow_status !== 'resolved' && ep.workflow_status !== 'dismissed'" class="btn btn-secondary btn-xs" @click="transitionEpisode(ep.id, 'resolved')">
+                Resolve
+              </button>
+              <button v-if="ep.workflow_status !== 'dismissed' && ep.workflow_status !== 'resolved'" class="btn btn-ghost btn-xs" @click="transitionEpisode(ep.id, 'dismissed')">
+                Dismiss
+              </button>
             </div>
           </div>
         </div>
-        <p v-if="episodeList.length === 0" class="muted">No active episodes.</p>
+        <p v-if="episodeList.length === 0" class="muted">No active alert episodes.</p>
       </div>
     </div>
 
     <!-- History Tab -->
-    <div v-if="activeTab === 'history'" class="tab-content">
+    <div v-if="activeTab === 'history'">
       <div v-if="historyLoading" class="loading">Loading history...</div>
-      <div v-else>
-        <div v-for="ep in historyList" :key="ep.id" class="card">
-          <div class="card-header">
-            <strong>Episode {{ ep.id.substring(0, 8) }}…</strong>
-            <span :class="'badge badge-' + episodeBadgeClass(ep.workflow_status)">{{ ep.workflow_status }}</span>
+      <div v-else class="grid grid-2">
+        <div v-for="ep in historyList" :key="ep.id" class="panel">
+          <div class="panel-head">
+            <strong class="mono isolate">Episode {{ ep.id.substring(0, 8) }}…</strong>
+            <span class="chip" :data-tone="episodeBadgeTone(ep.workflow_status)">
+              <span class="d"></span>
+              {{ ep.workflow_status }}
+            </span>
           </div>
-          <div class="card-body">
-            <table class="meta-table">
-              <tr><td>Rule</td><td>{{ ep.rule_id.substring(0, 8) }}…</td></tr>
-              <tr><td>Observed</td><td>{{ ep.observed_value }}</td></tr>
-              <tr><td>Started</td><td>{{ formatDate(ep.started_at) }}</td></tr>
-              <tr v-if="ep.resolved_at"><td>Resolved</td><td>{{ formatDate(ep.resolved_at) }}</td></tr>
-            </table>
+          <div class="panel-body">
+            <div class="kv" style="display: grid; grid-template-columns: 130px 1fr; gap: 5px 12px; font-size: 12px;">
+              <span class="muted">Rule:</span> <span class="mono isolate">{{ ep.rule_id.substring(0, 8) }}…</span>
+              <span class="muted">Observed Value:</span> <strong class="mono isolate">{{ ep.observed_value }}</strong>
+              <span class="muted">Started:</span> <span class="faint">{{ formatDate(ep.started_at) }}</span>
+              <span v-if="ep.resolved_at" class="muted">Resolved:</span>
+              <span v-if="ep.resolved_at" class="faint">{{ formatDate(ep.resolved_at) }}</span>
+            </div>
           </div>
         </div>
-        <p v-if="historyList.length === 0" class="muted">No resolved/dismissed episodes.</p>
+        <p v-if="historyList.length === 0" class="muted">No resolved or dismissed episodes.</p>
       </div>
     </div>
   </div>
@@ -152,10 +221,6 @@ import type {
   Investigation,
 } from '~/shared/types'
 
-// DOS-QA-002: use the useApi() composable so all requests go to the configured
-// apiBase (http://localhost:8100/v1) and carry correct X-Tenant/X-User headers.
-// Raw fetch('/v1/...') relative URLs target port 3000 and bypass the composable's
-// credential injection entirely.
 const { get, post } = useApi()
 const put = <T>(path: string, body?: unknown) =>
   useApi().call<T>(path, {
@@ -197,18 +262,18 @@ const episodeList = ref<MonitoringAlertEpisode[]>([])
 const historyLoading = ref(false)
 const historyList = ref<MonitoringAlertEpisode[]>([])
 
-function healthBadgeClass(status: string): string {
-  return ({ healthy: 'green', stale: 'yellow', suspended: 'red', unknown: 'gray' } as Record<string, string>)[status] || 'gray'
+function healthBadgeTone(status: string): string {
+  return ({ healthy: 'ok', stale: 'warn', suspended: 'crit', unknown: '' } as Record<string, string>)[status] || ''
 }
 
-function episodeBadgeClass(status: string): string {
+function episodeBadgeTone(status: string): string {
   return ({
-    open: 'yellow',
-    acknowledged: 'blue',
-    investigating: 'orange',
-    resolved: 'green',
-    dismissed: 'gray',
-  } as Record<string, string>)[status] || 'gray'
+    open: 'warn',
+    acknowledged: 'accent',
+    investigating: 'warn',
+    resolved: 'ok',
+    dismissed: '',
+  } as Record<string, string>)[status] || ''
 }
 
 function canTransition(status: string): boolean {
@@ -316,44 +381,23 @@ async function transitionEpisode(episodeId: string, status: string) {
   } catch { /* ignore */ }
 }
 
-onMounted(() => {
+function refreshAll() {
   loadHealth()
   loadRules()
   loadEpisodes()
   loadHistory()
+}
+
+onMounted(() => {
+  refreshAll()
 })
 </script>
 
 <style scoped>
-/* Minimal scoped styles; global card/badge/form styles come from app.vue layout */
-.page { padding: 1rem; max-width: 1200px; margin: auto; }
-h1 { font-size: 1.5rem; margin-top: 0; }
-.muted { color: #888; }
-.tabs { display: flex; gap: 0.5rem; margin: 1rem 0; }
-.tabs button { background: #222; color: #ccc; border: 1px solid #444; padding: 0.4rem 1rem; cursor: pointer; }
-.tabs button.active { background: #335; color: #fff; border-color: #669; }
-.tab-content { margin-top: 0.5rem; }
-.card { background: #1e1e2e; border: 1px solid #333; border-radius: 6px; margin-bottom: 0.5rem; overflow: hidden; }
-.card-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; background: #2a2a3a; }
-.card-body { padding: 0.5rem 0.75rem; color: #ccc; }
-.badge { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
-.badge-green { background: #1a4; color: #fff; }
-.badge-yellow { background: #b82; color: #000; }
-.badge-red { background: #c33; color: #fff; }
-.badge-gray { background: #555; color: #ccc; }
-.badge-blue { background: #36a; color: #fff; }
-.badge-orange { background: #d75; color: #000; }
-.meta-table { width: 100%; font-size: 0.85rem; }
-.meta-table td:first-child { color: #888; padding-right: 0.75rem; }
-.loading { color: #888; font-style: italic; }
-.error-banner { background: #3a1a1a; color: #e55; padding: 0.5rem; border-radius: 4px; }
-.error-text { color: #e55; margin-left: 0.5rem; }
-.actions { display: flex; gap: 0.4rem; margin-top: 0.4rem; }
-.btn { background: #335; color: #eee; border: 1px solid #557; padding: 0.3rem 0.75rem; border-radius: 4px; cursor: pointer; }
-.btn-sm { composes: btn; font-size: 0.8rem; }
-.btn-xs { composes: btn; font-size: 0.75rem; padding: 0.2rem 0.5rem; }
-.rule-form { padding: 0.75rem; }
-.form-row { display: flex; gap: 0.75rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
-.form-row label { display: flex; flex-direction: column; font-size: 0.8rem; color: #888; }
-.form-row input, .form-row select { background: #222; color: #ddd; border: 1px solid #444; padding: 0.25rem; }
+.monitoring-page { display: flex; flex-direction: column; gap: 0; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+.eyebrow { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+.page-head h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; color: var(--fg-strong); line-height: 1.2; }
+.page-head .desc { font-size: 13px; color: var(--muted); margin-top: 4px; max-width: 68ch; }
+.page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 </style>
