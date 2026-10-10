@@ -13,101 +13,115 @@
       </div>
     </div>
 
-    <!-- Security & Pilot Status Banner -->
-    <div v-if="pilot" class="status-banner card margin-y">
-      <div class="banner-grid">
-        <div>
-          <span class="muted text-xs">PILOT NAME</span>
-          <h3>{{ pilot.name }}</h3>
-          <span class="badge badge-green">{{ pilot.status }}</span>
-        </div>
-        <div>
-          <span class="muted text-xs">DOMAIN & GRAIN</span>
-          <p class="margin-0"><strong>{{ pilot.domain }}</strong> (ticket_id)</p>
-          <span class="text-xs muted">Dataset Rev #{{ pilot.dataset_revision || 1 }}</span>
-        </div>
-        <div>
-          <span class="muted text-xs">AUTHENTICATION & SECURITY GATE</span>
-          <div class="margin-y">
-            <span class="badge badge-warning">INTERNAL EVALUATION ONLY</span>
+    <!-- Loading / Empty State / Main Content -->
+    <div v-if="loading" class="loading">{{ t('common.loading', locale) }}</div>
+    <div v-else-if="!pilot" class="card empty-state text-center" style="padding: 3rem 1.5rem; text-align: center;">
+      <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🚀</div>
+      <h3 style="margin-bottom: 0.5rem;">{{ locale === 'ar' ? 'لم يتم تكوين برنامج تشغيلي تجريبي بعد' : 'No Operational Pilot Initialized Yet' }}</h3>
+      <p class="muted" style="max-width: 500px; margin: 0 auto 1.5rem auto;">
+        {{ locale === 'ar' ? 'قم بإعداد برنامج الدعم التشغيلي التجريبي لتحميل الحزمة الدلالية وحساب المقاييس ومراقبة الطوابير.' : 'Initialize the Support SLA pilot runbook to bootstrap semantic definitions, run synthetic batches, and monitor operational loop health.' }}
+      </p>
+      <NuxtLink to="/pilot/setup" class="btn btn-primary">
+        {{ t('pilotCenter.setupLink', locale) }}
+      </NuxtLink>
+    </div>
+    <div v-else>
+      <!-- Security & Pilot Status Banner -->
+      <div class="status-banner card margin-y">
+        <div class="banner-grid">
+          <div>
+            <span class="muted text-xs">PILOT NAME</span>
+            <h3>{{ pilot.name }}</h3>
+            <span class="badge badge-green">{{ pilot.status }}</span>
           </div>
-          <p class="text-xs muted margin-0">Demo headers active. External customer pilot blocked until security gate resolution.</p>
+          <div>
+            <span class="muted text-xs">DOMAIN & GRAIN</span>
+            <p class="margin-0"><strong>{{ pilot.domain }}</strong> (ticket_id)</p>
+            <span class="text-xs muted">Dataset Rev #{{ pilot.dataset_revision || 1 }}</span>
+          </div>
+          <div>
+            <span class="muted text-xs">AUTHENTICATION & SECURITY GATE</span>
+            <div class="margin-y">
+              <span class="badge badge-warning">INTERNAL EVALUATION ONLY</span>
+            </div>
+            <p class="text-xs muted margin-0">Demo headers active. External customer pilot blocked until security gate resolution.</p>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Executive Summary Grid -->
-    <div v-if="summary" class="grid kpi-grid margin-y">
-      <NuxtLink to="/alerts" class="kpi-card card">
-        <span class="kpi-label">Active Alerts</span>
-        <span class="kpi-val danger-text">{{ summary.open_alerts }}</span>
-        <span class="kpi-sub muted">Requires immediate attention</span>
-      </NuxtLink>
+      <!-- Executive Summary Grid -->
+      <div v-if="summary" class="grid kpi-grid margin-y">
+        <NuxtLink to="/alerts" class="kpi-card card">
+          <span class="kpi-label">Active Alerts</span>
+          <span class="kpi-val danger-text bidi-ltr">{{ summary.open_alerts }}</span>
+          <span class="kpi-sub muted">Requires immediate attention</span>
+        </NuxtLink>
 
-      <NuxtLink to="/predictive" class="kpi-card card">
-        <span class="kpi-label">At-Risk Cases (24h SLA)</span>
-        <span class="kpi-val warning-text">{{ summary.high_risk_cases }}</span>
-        <span class="kpi-sub muted">High SLA breach probability</span>
-      </NuxtLink>
+        <NuxtLink to="/predictive" class="kpi-card card">
+          <span class="kpi-label">At-Risk Cases (24h SLA)</span>
+          <span class="kpi-val warning-text bidi-ltr">{{ summary.high_risk_cases }}</span>
+          <span class="kpi-sub muted">High SLA breach probability</span>
+        </NuxtLink>
 
-      <NuxtLink to="/investigations" class="kpi-card card">
-        <span class="kpi-label">Active Investigations</span>
-        <span class="kpi-val blue-text">{{ summary.active_investigations }}</span>
-        <span class="kpi-sub muted">Open root-cause cases</span>
-      </NuxtLink>
+        <NuxtLink to="/investigations" class="kpi-card card">
+          <span class="kpi-label">Active Investigations</span>
+          <span class="kpi-val blue-text bidi-ltr">{{ summary.active_investigations }}</span>
+          <span class="kpi-sub muted">Open root-cause cases</span>
+        </NuxtLink>
 
-      <NuxtLink to="/decisions" class="kpi-card card">
-        <span class="kpi-label">Open / Active Decisions</span>
-        <span class="kpi-val purple-text">{{ summary.open_decisions }}</span>
-        <span class="kpi-sub muted">Governed operational loop</span>
-      </NuxtLink>
+        <NuxtLink to="/decisions" class="kpi-card card">
+          <span class="kpi-label">Open / Active Decisions</span>
+          <span class="kpi-val purple-text bidi-ltr">{{ summary.open_decisions }}</span>
+          <span class="kpi-sub muted">Governed operational loop</span>
+        </NuxtLink>
 
-      <NuxtLink to="/decisions" class="kpi-card card">
-        <span class="kpi-label">Decision Reviews Due</span>
-        <span class="kpi-val orange-text">{{ summary.reviews_due }}</span>
-        <span class="kpi-sub muted">Pending outcome recording</span>
-      </NuxtLink>
+        <NuxtLink to="/decisions" class="kpi-card card">
+          <span class="kpi-label">Decision Reviews Due</span>
+          <span class="kpi-val orange-text bidi-ltr">{{ summary.reviews_due }}</span>
+          <span class="kpi-sub muted">Pending outcome recording</span>
+        </NuxtLink>
 
-      <NuxtLink to="/decisions" class="kpi-card card">
-        <span class="kpi-label">Evaluated Outcomes</span>
-        <span class="kpi-val green-text">{{ summary.completed_reviews }}</span>
-        <span class="kpi-sub muted">Closed decision reviews</span>
-      </NuxtLink>
-    </div>
+        <NuxtLink to="/decisions" class="kpi-card card">
+          <span class="kpi-label">Evaluated Outcomes</span>
+          <span class="kpi-val green-text bidi-ltr">{{ summary.completed_reviews }}</span>
+          <span class="kpi-sub muted">Closed decision reviews</span>
+        </NuxtLink>
+      </div>
 
-    <!-- Executive Overview Answers Section -->
-    <div class="card margin-y">
-      <h2>Executive Operational Summary</h2>
-      <div class="answers-grid">
-        <div class="answer-item">
-          <h4>1. What needs attention now?</h4>
-          <p v-if="summary && summary.open_alerts > 0">
-            <strong>{{ summary.open_alerts }} active alert episode(s)</strong> detected in queue backlog and SLA breach rates.
-          </p>
-          <p v-else class="muted">No active alert episodes. Operations are running within threshold limits.</p>
-        </div>
+      <!-- Executive Overview Answers Section -->
+      <div class="card margin-y">
+        <h2>Executive Operational Summary</h2>
+        <div class="answers-grid">
+          <div class="answer-item">
+            <h4>1. What needs attention now?</h4>
+            <p v-if="summary && summary.open_alerts > 0">
+              <strong>{{ summary.open_alerts }} active alert episode(s)</strong> detected in queue backlog and SLA breach rates.
+            </p>
+            <p v-else class="muted">No active alert episodes. Operations are running within threshold limits.</p>
+          </div>
 
-        <div class="answer-item">
-          <h4>2. Which cases are at risk?</h4>
-          <p v-if="summary && summary.high_risk_cases > 0">
-            <strong>{{ summary.high_risk_cases }} open case(s)</strong> classified as High Risk ($\ge 50\%$ breach probability within 24h).
-          </p>
-          <p v-else class="muted">No high-risk cases flagged by evaluation models.</p>
-        </div>
+          <div class="answer-item">
+            <h4>2. Which cases are at risk?</h4>
+            <p v-if="summary && summary.high_risk_cases > 0">
+              <strong>{{ summary.high_risk_cases }} open case(s)</strong> classified as High Risk (&ge; 50% breach probability within 24h).
+            </p>
+            <p v-else class="muted">No high-risk cases flagged by evaluation models.</p>
+          </div>
 
-        <div class="answer-item">
-          <h4>3. What decisions are open & due for review?</h4>
-          <p v-if="summary">
-            <strong>{{ summary.open_decisions }} open decision(s)</strong>, with <strong>{{ summary.reviews_due }} due for review</strong>.
-          </p>
-        </div>
+          <div class="answer-item">
+            <h4>3. What decisions are open & due for review?</h4>
+            <p v-if="summary">
+              <strong>{{ summary.open_decisions }} open decision(s)</strong>, with <strong>{{ summary.reviews_due }} due for review</strong>.
+            </p>
+          </div>
 
-        <div class="answer-item">
-          <h4>4. What outcomes have been observed?</h4>
-          <p v-if="summary && summary.completed_reviews > 0">
-            <strong>{{ summary.completed_reviews }} decision review(s)</strong> completed with recorded baseline vs observed comparisons.
-          </p>
-          <p v-else class="muted">No decision outcomes evaluated yet in this pilot lifecycle.</p>
+          <div class="answer-item">
+            <h4>4. What outcomes have been observed?</h4>
+            <p v-if="summary && summary.completed_reviews > 0">
+              <strong>{{ summary.completed_reviews }} decision review(s)</strong> completed with recorded baseline vs observed comparisons.
+            </p>
+            <p v-else class="muted">No decision outcomes evaluated yet in this pilot lifecycle.</p>
+          </div>
         </div>
       </div>
     </div>

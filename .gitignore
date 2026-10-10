@@ -20,3 +20,4 @@ services/analytics/.tmp/
 .coverage
 apps/api/storage/framework/views/
 apps/api/bootstrap/cache/
+.agents/

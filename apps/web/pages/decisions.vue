@@ -13,8 +13,15 @@
     <!-- Loading / Error / List -->
     <div v-if="loading" class="loading">{{ t('common.loading', locale) }}</div>
     <div v-else-if="error" class="error-banner">{{ error }}</div>
-    <div v-else-if="decisions.length === 0" class="card empty-state">
-      <p>{{ t('common.noData', locale) }}</p>
+    <div v-else-if="decisions.length === 0" class="card empty-state text-center" style="padding: 3rem 1.5rem; text-align: center;">
+      <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">📋</div>
+      <h3 style="margin-bottom: 0.5rem;">{{ locale === 'ar' ? 'لا توجد قرارات مسجلة حتى الآن' : 'No Operational Decisions Recorded Yet' }}</h3>
+      <p class="muted" style="max-width: 500px; margin: 0 auto 1.5rem auto;">
+        {{ locale === 'ar' ? 'ابدأ بتسجيل أول قرار تشغيلي لربط الأدلة وتتبع النتائج والامتثال للحوكمة.' : 'Record your first operational decision to bind evidence artifacts, track outcomes, and enforce governance freeze.' }}
+      </p>
+      <button class="btn btn-primary" @click="showCreateModal = true">
+        {{ t('decisions.newDecision', locale) }}
+      </button>
     </div>
     <div v-else class="grid">
       <div v-for="dec in decisions" :key="dec.id" class="card dec-card">
@@ -119,14 +126,14 @@
 
           <!-- Lifecycle Action Buttons -->
           <div class="actions margin-top">
-            <button v-if="dec.status === 'draft'" class="btn btn-sm" @click="transitionDecision(dec.id, 'proposed')">Propose Decision</button>
-            <button v-if="dec.status === 'proposed'" class="btn btn-sm btn-success" @click="transitionDecision(dec.id, 'accepted')">Accept & Freeze</button>
-            <button v-if="dec.status === 'proposed'" class="btn btn-sm danger" @click="transitionDecision(dec.id, 'rejected')">Reject</button>
-            <button v-if="dec.status === 'accepted'" class="btn btn-sm" @click="transitionDecision(dec.id, 'implementation_pending')">Implementation Pending</button>
-            <button v-if="dec.status === 'implementation_pending'" class="btn btn-sm" @click="transitionDecision(dec.id, 'active')">Set Active</button>
-            <button v-if="dec.status === 'active'" class="btn btn-sm" @click="transitionDecision(dec.id, 'review_due')">Mark Review Due</button>
-            <button v-if="dec.status === 'review_due'" class="btn btn-sm btn-primary" @click="openOutcomeModal(dec.id)">Record Outcome</button>
-            <button v-if="dec.status === 'evaluated'" class="btn btn-sm secondary" @click="transitionDecision(dec.id, 'closed')">Close Decision</button>
+            <button v-if="dec.status === 'draft'" class="btn btn-sm" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'proposed')">Propose Decision</button>
+            <button v-if="dec.status === 'proposed'" class="btn btn-sm btn-success" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'accepted')">Accept & Freeze</button>
+            <button v-if="dec.status === 'proposed'" class="btn btn-sm danger" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'rejected')">Reject</button>
+            <button v-if="dec.status === 'accepted'" class="btn btn-sm" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'implementation_pending')">Implementation Pending</button>
+            <button v-if="dec.status === 'implementation_pending'" class="btn btn-sm" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'active')">Set Active</button>
+            <button v-if="dec.status === 'active'" class="btn btn-sm" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'review_due')">Mark Review Due</button>
+            <button v-if="dec.status === 'review_due'" class="btn btn-sm btn-primary" :disabled="pendingTransitions[dec.id]" @click="openOutcomeModal(dec.id)">Record Outcome</button>
+            <button v-if="dec.status === 'evaluated'" class="btn btn-sm secondary" :disabled="pendingTransitions[dec.id]" @click="transitionDecision(dec.id, 'closed')">Close Decision</button>
           </div>
         </div>
       </div>
@@ -245,6 +252,7 @@ const { get, post } = useApi()
 
 const decisions = ref<DecisionRecord[]>([])
 const boundEvidence = ref<Record<string, DecisionEvidenceBinding[]>>({})
+const pendingTransitions = ref<Record<string, boolean>>({})
 const loading = ref(true)
 const error = ref('')
 
@@ -348,11 +356,15 @@ async function createDecision() {
 }
 
 async function transitionDecision(decisionId: string, newStatus: string) {
+  if (pendingTransitions.value[decisionId]) return
+  pendingTransitions.value[decisionId] = true
   try {
     await post(`/decisions/${decisionId}/transition`, { status: newStatus, reason: `Transitioned to ${newStatus}` })
     await loadDecisions()
   } catch (e: unknown) {
     alert(e instanceof Error ? e.message : 'Status transition failed')
+  } finally {
+    pendingTransitions.value[decisionId] = false
   }
 }
 

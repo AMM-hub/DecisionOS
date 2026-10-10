@@ -112,6 +112,29 @@ code { background: #f1f5f9; padding: 0.05rem 0.3rem; border-radius: 4px; font-si
 .rtl .stat { text-align: right; }
 .rtl .row { flex-direction: row-reverse; }
 
+/* Milestone 2 BiDi Isolation & Preservation Rules */
+.bidi-ltr,
+bdi,
+code,
+.hash,
+.kpi-val,
+.stat .n,
+.factor-impact,
+[data-bidi="ltr"] {
+  unicode-bidi: isolate;
+  direction: ltr;
+  display: inline-block;
+}
+
+.rtl .kpi-val,
+.rtl .stat .n,
+.rtl code,
+.rtl .hash,
+.rtl .factor-impact {
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+
 /* Accessibility: focus visible, high contrast */
 *:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
 a, button, select, input, textarea { &:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; } }

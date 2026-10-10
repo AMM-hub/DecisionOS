@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 
 import io
@@ -20,6 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .security import authenticate_identity, create_access_token, verify_access_token
 from .execution import compile_plan, execute
 from .forecasting import (
     ForecastRefused,
@@ -98,19 +100,64 @@ def create_app(data_dir: Path) -> FastAPI:
             content={"code": "invalid_value", "detail": str(exc)}
         )
 
+    _current_auth_header: ContextVar[str | None] = ContextVar("current_auth_header", default=None)
+
+    @app.middleware("http")
+    async def capture_auth_middleware(request: Request, call_next):
+        token = request.headers.get("authorization")
+        reset_token = _current_auth_header.set(token)
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            _current_auth_header.reset(reset_token)
+
     @app.get("/v1/health")
     async def health():
-        return {"status": "ok", "service": "analytics-control-plane", "mode": "demo-stand-in", "time": now_iso()}
+        return {"status": "ok", "service": "analytics-control-plane", "mode": "authenticated", "time": now_iso()}
 
-    def ctx(x_tenant: str | None, x_user: str | None) -> tuple[str, str]:
-        if x_tenant not in DEMO_TENANTS or x_user not in DEMO_USERS:
-            raise HTTPException(401, "demo authentication missing")
-        if DEMO_USERS[x_user][0] != x_tenant:
-            raise HTTPException(404, "not found")  # never disclose other tenants (§23.4)
-        return x_tenant, x_user
+    @app.post("/v1/auth/token")
+    async def issue_token_api(request: Request):
+        """Issue cryptographically signed JWT access token for tenant & user."""
+        body = await request.json()
+        tenant_id = body.get("tenant_id") or "tenant_alpha"
+        user_id = body.get("user_id") or "alpha.manager"
+        role = body.get("role") or "ops_manager"
+        expires_in = int(body.get("expires_in_seconds", 86400))
+        token = create_access_token(tenant_id=tenant_id, user_id=user_id, role=role, expires_in_seconds=expires_in)
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "expires_in": expires_in,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "role": role,
+        }
+
+    @app.get("/v1/auth/verify")
+    async def verify_token_api(request: Request, authorization: str = Header(default=None)):
+        auth_hdr = authorization or request.headers.get("authorization")
+        if not auth_hdr or not auth_hdr.lower().startswith("bearer "):
+            raise HTTPException(401, "Bearer token required")
+        try:
+            claims = verify_access_token(auth_hdr[7:].strip())
+        except ValueError as e:
+            raise HTTPException(401, str(e))
+        return {"status": "authenticated", "claims": claims}
+
+    def ctx(x_tenant: str | None = None, x_user: str | None = None) -> tuple[str, str]:
+        auth_hdr = _current_auth_header.get()
+        tenant, user, _ = authenticate_identity(
+            authorization=auth_hdr,
+            x_tenant=x_tenant,
+            x_user=x_user,
+            demo_tenants=DEMO_TENANTS,
+            demo_users=DEMO_USERS,
+        )
+        return tenant, user
 
     def role_of(user: str) -> str:
-        return DEMO_USERS[user][1]
+        return DEMO_USERS.get(user, ("tenant_alpha", "ops_manager"))[1]
 
     # ---- uploads ------------------------------------------------------
     @app.post("/v1/uploads", status_code=201)

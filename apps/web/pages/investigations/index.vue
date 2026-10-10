@@ -38,8 +38,15 @@
     <!-- Loading / Error / Empty States -->
     <div v-if="loading" class="loading">{{ t('common.loading', locale) }}</div>
     <div v-else-if="error" class="error-banner">{{ error }}</div>
-    <div v-else-if="investigations.length === 0" class="empty-state card">
-      <p>{{ t('common.noData', locale) }}</p>
+    <div v-else-if="investigations.length === 0" class="empty-state card text-center" style="padding: 3rem 1.5rem; text-align: center;">
+      <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🔍</div>
+      <h3 style="margin-bottom: 0.5rem;">{{ locale === 'ar' ? 'لا توجد تحقيقات حالية' : 'No Operational Investigations Found' }}</h3>
+      <p class="muted" style="max-width: 500px; margin: 0 auto 1.5rem auto;">
+        {{ locale === 'ar' ? 'ابدأ تحقيقاً جديداً لفحص الانحرافات التشغيلية، وصياغة الفرضيات، وربط الأدلة المقارنة.' : 'Launch an investigation to diagnose operational bottlenecks, formulate root-cause hypotheses, and capture reproducible evidence.' }}
+      </p>
+      <button class="btn btn-primary" @click="showNewModal = true">
+        {{ t('investigations.newInvestigation', locale) }}
+      </button>
     </div>
     <div v-else class="grid">
       <div v-for="inv in investigations" :key="inv.id" class="card inv-card" @click="navigateTo(`/investigations/${inv.id}`)">

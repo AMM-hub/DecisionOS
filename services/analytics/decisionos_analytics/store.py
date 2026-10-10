@@ -16,6 +16,7 @@ from pathlib import Path
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
 
 CREATE TABLE IF NOT EXISTS tenant (
   id TEXT PRIMARY KEY,
@@ -409,12 +410,61 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+import threading
+import time
+
+
 class Store:
     def __init__(self, path: Path | str) -> None:
-        self.conn = sqlite3.connect(str(path), check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(SCHEMA)
-        self.conn.commit()
+        self.path = str(path)
+        self._local = threading.local()
+        self._lock = threading.Lock()
+        self._all_conns: list[sqlite3.Connection] = []
+
+        # Bootstrap database schema on primary connection
+        init_conn = self._create_connection()
+        init_conn.executescript(SCHEMA)
+        init_conn.commit()
+        self._local.conn = init_conn
+
+    def _create_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, check_same_thread=False, timeout=15.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        if self.path != ":memory:":
+            try:
+                conn.execute("PRAGMA journal_mode = WAL;")
+                conn.execute("PRAGMA synchronous = NORMAL;")
+            except sqlite3.OperationalError:
+                pass
+        with self._lock:
+            self._all_conns.append(conn)
+        return conn
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = self._create_connection()
+            self._local.conn = c
+        return c
+
+    def execute_with_retry(
+        self, query: str, params: tuple | list = (), max_retries: int = 5, backoff_base: float = 0.05
+    ) -> sqlite3.Cursor:
+        """Execute query with exponential backoff on SQLite lock/busy contention."""
+        for attempt in range(max_retries):
+            try:
+                cur = self.conn.execute(query, params)
+                self.conn.commit()
+                return cur
+            except sqlite3.OperationalError as e:
+                err_msg = str(e).lower()
+                if ("database is locked" in err_msg or "busy" in err_msg) and attempt < max_retries - 1:
+                    time.sleep(backoff_base * (2**attempt))
+                    continue
+                raise
 
     # -- helpers ---------------------------------------------------------
     def audit(self, tenant_id: str, actor: str, action: str, target: str, result: str, context: dict | None = None) -> None:
@@ -442,4 +492,12 @@ class Store:
         return f"evidence-{eid[:8]}"
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            for c in self._all_conns:
+                try:
+                    c.close()
+                except sqlite3.Error:
+                    pass
+            self._all_conns.clear()
+        if hasattr(self._local, "conn"):
+            self._local.conn = None
