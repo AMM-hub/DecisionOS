@@ -25,7 +25,16 @@
         <span class="sub"><span class="isolate mono">{{ riskQueue.length }}</span> cases evaluated</span>
       </div>
 
-      <div class="table-scroll">
+      <div v-if="riskQueue.length === 0" class="empty" style="padding: 50px 20px;">
+        <div class="e-ico">
+          <svg><use href="#i-pulse"/></svg>
+        </div>
+        <h3>No cases scored yet</h3>
+        <p class="muted">Run a predictive score against a target to populate the operational risk queue.</p>
+        <NuxtLink to="/forecasts" class="btn btn-primary btn-sm" style="margin-top: 10px;">Go to Forecasts</NuxtLink>
+      </div>
+
+      <div v-else ref="tableScroll" class="table-scroll" :class="{ 'is-scrollable': isScrollable }">
         <table class="dt">
           <thead>
             <tr>
@@ -56,7 +65,7 @@
                   <span class="faint" style="font-size: 11px;">Window: {{ item.outcome_window }}</span>
                 </span>
               </td>
-              <td class="faint mono isolate" style="font-size: 11.5px;">{{ item.deadline }}</td>
+              <td class="faint mono" style="font-size: 11.5px;"><span class="isolate">{{ formatDateTime(item.deadline, locale) }}</span></td>
               <td class="mono isolate">{{ item.current_age }}</td>
 
               <!-- Probability Score -->
@@ -204,34 +213,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useApi } from '~/composables/api'
 import { useLocale, t } from '~/composables/locale'
-import { shortId, titleCase } from '~/composables/format'
+import { formatDateTime } from '~/composables/format'
 
-const { get, post } = useApi()
+const { post } = useApi()
 const { locale } = useLocale()
-
-interface PredictiveTarget {
-  id: string
-  name: string
-  entity_type: string
-  outcome_window: string
-  deadline_semantics: string
-}
-
-interface PredictiveModel {
-  id: string
-  target_id: string
-  version: number
-  algorithm: string
-  status: string
-  threshold_policy: {
-    policy_type?: string
-    capacity?: number
-    threshold?: number
-  }
-}
 
 interface CaseRiskItem {
   case_id: string
@@ -256,114 +244,26 @@ interface CaseRiskItem {
 }
 
 const loading = ref(true)
-const targets = ref<PredictiveTarget[]>([])
-const models = ref<PredictiveModel[]>([])
 const riskQueue = ref<CaseRiskItem[]>([])
 const selectedItem = ref<CaseRiskItem | null>(null)
 const launchingInv = ref(false)
 const invResult = ref<{ id: string } | null>(null)
+const tableScroll = ref<HTMLElement | null>(null)
+const isScrollable = ref(false)
 
 async function loadRiskQueue() {
   loading.value = true
   try {
-    const tgts = await get<PredictiveTarget[]>('/v1/predictive/targets').catch(() => [])
-    const mdls = await get<PredictiveModel[]>('/v1/predictive/models').catch(() => [])
-    targets.value = tgts || []
-    models.value = mdls || []
-
-    riskQueue.value = [
-      {
-        case_id: 'CASE-8021',
-        target_id: tgts[0]?.id || 'tgt-sla-24h',
-        target_name: 'Case SLA Breach 24h',
-        outcome_window: '24h',
-        deadline: '2026-10-05T14:00:00Z',
-        current_age: '18h 30m',
-        case_state: 'eligible',
-        score: 0.845,
-        probability_status: 'calibrated',
-        threshold: 0.50,
-        risk_tier: 'HIGH',
-        model_id: mdls[0]?.id || 'mdl-alpha-lr',
-        model_version: 1,
-        model_status: 'active',
-        last_scored: '2026-10-04T19:30:00Z',
-        data_freshness: '5m ago',
-        suitability_state: 'suitable',
-        factors: [
-          { factor: 'Recent step re-assignments (>3)', impact: '+0.28' },
-          { factor: 'High queue depth in tier 2 support', impact: '+0.22' },
-          { factor: 'Elapsing time ratio (>75% SLA window)', impact: '+0.19' },
-        ],
-      },
-      {
-        case_id: 'CASE-8022',
-        target_id: tgts[0]?.id || 'tgt-sla-24h',
-        target_name: 'Case SLA Breach 24h',
-        outcome_window: '24h',
-        deadline: '2026-10-05T18:00:00Z',
-        current_age: '12h 10m',
-        case_state: 'eligible',
-        score: 0.382,
-        probability_status: 'calibrated',
-        threshold: 0.50,
-        risk_tier: 'MEDIUM',
-        model_id: mdls[0]?.id || 'mdl-alpha-lr',
-        model_version: 1,
-        model_status: 'active',
-        last_scored: '2026-10-04T19:30:00Z',
-        data_freshness: '5m ago',
-        suitability_state: 'suitable',
-        factors: [
-          { factor: 'Standard progression rhythm', impact: '-0.15' },
-        ],
-      },
-      {
-        case_id: 'CASE-7991',
-        target_id: tgts[0]?.id || 'tgt-sla-24h',
-        target_name: 'Case SLA Breach 24h',
-        outcome_window: '24h',
-        deadline: '2026-10-04T12:00:00Z',
-        current_age: '28h 00m',
-        case_state: 'already_overdue',
-        score: null,
-        probability_status: 'unavailable',
-        threshold: 0.50,
-        risk_tier: null,
-        model_id: mdls[0]?.id || 'mdl-alpha-lr',
-        model_version: 1,
-        model_status: 'active',
-        last_scored: '2026-10-04T19:30:00Z',
-        data_freshness: '5m ago',
-        suitability_state: 'already_overdue',
-        reason: 'Case deadline has already elapsed; prospective risk prediction unavailable',
-        factors: [],
-      },
-      {
-        case_id: 'CASE-8025',
-        target_id: tgts[1]?.id || 'tgt-closure-7d',
-        target_name: 'Weekly Resolution 7d',
-        outcome_window: '7d',
-        deadline: '2026-10-11T00:00:00Z',
-        current_age: '1h 00m',
-        case_state: 'eligible',
-        score: null,
-        probability_status: 'suspended',
-        threshold: 0.65,
-        risk_tier: null,
-        model_id: 'mdl-beta-rf',
-        model_version: 2,
-        model_status: 'suspended',
-        last_scored: '2026-10-04T19:30:00Z',
-        data_freshness: '5m ago',
-        suitability_state: 'model_suspended',
-        reason: 'Active model for this target has been suspended by governance',
-        factors: [],
-      },
-    ]
+    riskQueue.value = []
   } finally {
     loading.value = false
   }
+}
+
+function updateScrollable() {
+  const el = tableScroll.value
+  if (!el) return
+  isScrollable.value = el.scrollWidth > el.clientWidth
 }
 
 async function launchProactiveInvestigation(item: CaseRiskItem) {
@@ -400,8 +300,18 @@ async function launchProactiveInvestigation(item: CaseRiskItem) {
   }
 }
 
+watch(riskQueue, async () => {
+  await nextTick()
+  updateScrollable()
+})
+
 onMounted(() => {
   loadRiskQueue()
+  window.addEventListener('resize', updateScrollable)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateScrollable)
 })
 </script>
 
@@ -412,4 +322,16 @@ onMounted(() => {
 .page-head h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; color: var(--fg-strong); line-height: 1.2; }
 .page-head .desc { font-size: 13px; color: var(--muted); margin-top: 4px; max-width: 68ch; }
 .page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.table-scroll { position: relative; }
+.table-scroll.is-scrollable { box-shadow: inset -14px 0 14px -14px rgba(0, 0, 0, 0.3); }
+:global(.rtl) .table-scroll.is-scrollable { box-shadow: inset 14px 0 14px -14px rgba(0, 0, 0, 0.3); }
+.table-scroll thead th:first-child,
+.table-scroll tbody td:first-child {
+  position: sticky;
+  inset-inline-start: 0;
+  background: var(--surface);
+  z-index: 3;
+}
+.table-scroll thead th:first-child { z-index: 4; }
 </style>

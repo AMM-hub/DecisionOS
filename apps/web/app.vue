@@ -40,7 +40,7 @@ const actorInitials = computed(() => {
 
 const routeTitle = computed(() => {
   const p = route.path
-  if (p === '/pilot') return t('nav.pilot', locale.value)
+  if (p === '/pilot') return t('nav.pilotDashboard', locale.value)
   if (p === '/decisions') return t('nav.decisions', locale.value)
   if (p === '/risk') return t('nav.risk', locale.value)
   if (p === '/monitoring') return t('nav.monitoring', locale.value)
