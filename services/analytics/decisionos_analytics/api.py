@@ -18,9 +18,17 @@ from pathlib import Path
 import io
 
 import polars as pl
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+def page_params(
+    limit: int = Query(50, ge=1, le=500, description="Page limit (1-500)"),
+    offset: int = Query(0, ge=0, description="Page offset (>=0)"),
+) -> tuple[int, int]:
+    return limit, offset
+
 
 from .security import (
     authenticate_identity,
@@ -135,6 +143,22 @@ def create_app(data_dir: Path) -> FastAPI:
             status_code=422,
             content={"code": "invalid_value", "detail": str(exc)}
         )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError):
+        errors = exc.errors()
+        is_pagination = any(
+            err.get("loc") and len(err["loc"]) >= 2 and err["loc"][0] == "query" and err["loc"][1] in ("limit", "offset")
+            for err in errors
+        )
+        if is_pagination:
+            first_err = errors[0] if errors else {}
+            loc_param = first_err.get("loc", ["", ""])[1] if len(first_err.get("loc", [])) >= 2 else "pagination"
+            msg = first_err.get("msg", "Invalid pagination parameter.")
+            return api_error(422, "invalid_pagination", f"Invalid pagination parameter '{loc_param}': {msg}")
+        first_err = errors[0] if errors else {}
+        msg = first_err.get("msg", "Validation error.")
+        return api_error(422, "invalid_value", msg)
 
     _current_auth_header: ContextVar[str | None] = ContextVar("current_auth_header", default=None)
 
@@ -281,12 +305,22 @@ def create_app(data_dir: Path) -> FastAPI:
         return {"upload_id": upload_id, "status": "scanned", "scan": {"verdict": "clean", "reasons": []}, "dataset_id": result["dataset_id"], "revision": result["revision"], "revision_state": result["revision_state"]}
 
     @app.get("/v1/uploads")
-    async def list_uploads(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_uploads(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
+        total = store.conn.execute(
+            "SELECT COUNT(*) c FROM upload WHERE tenant_id=?", (tenant,)
+        ).fetchone()["c"]
         rows = store.conn.execute(
-            "SELECT id, filename, status, dataset_id, created_at FROM upload WHERE tenant_id=? ORDER BY created_at DESC",
-            (tenant,),
+            "SELECT id, filename, status, dataset_id, created_at FROM upload WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (tenant, limit, offset),
         ).fetchall()
+        response.headers["X-Total-Count"] = str(total)
         return [dict(r) for r in rows]
 
     @app.get("/v1/uploads/{upload_id}/preview")
@@ -309,9 +343,29 @@ def create_app(data_dir: Path) -> FastAPI:
 
     # ---- datasets -------------------------------------------------------
     @app.get("/v1/datasets")
-    async def datasets(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def datasets(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        q: str | None = Query(default=None, description="Case-insensitive dataset name substring filter"),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        rows = store.conn.execute("SELECT * FROM dataset WHERE tenant_id=?", (tenant,)).fetchall()
+        limit, offset = pagination
+        where_clause = "WHERE tenant_id=?"
+        params: list[Any] = [tenant]
+        if q:
+            where_clause += " AND LOWER(name) LIKE ?"
+            params.append(f"%{q.lower()}%")
+
+        total = store.conn.execute(
+            f"SELECT COUNT(*) c FROM dataset {where_clause}", tuple(params)
+        ).fetchone()["c"]
+
+        rows = store.conn.execute(
+            f"SELECT * FROM dataset {where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
         out = []
         for d in rows:
             grain = json.loads(d["grain_key"]) if d["grain_key"] else None
@@ -334,6 +388,7 @@ def create_app(data_dir: Path) -> FastAPI:
                 "grain_confirmed": d["grain_confirmed_at"] is not None, "grain": grain,
                 "row_count": published_row["row_count"] if published_row else None,
             })
+        response.headers["X-Total-Count"] = str(total)
         return out
 
     @app.get("/v1/datasets/{dataset_id}/schema")
@@ -398,10 +453,18 @@ def create_app(data_dir: Path) -> FastAPI:
             _api_logger.exception("publish conflict: %s", e)
             return api_error(409, "concurrent_publish_conflict", "A concurrent publish moved the revision pointer. Refresh and retry.")
 
-    # ---- definitions & metrics -----------------------------------------
     @app.get("/v1/metrics/definitions")
-    async def list_definitions(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_definitions(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
+        total = store.conn.execute(
+            "SELECT COUNT(*) c FROM definition_version WHERE tenant_id=?", (tenant,)
+        ).fetchone()["c"]
         rows = store.conn.execute(
             """SELECT dv.*, dp.version AS pub_version,
                       (SELECT MAX(version) FROM definition_publication p2
@@ -409,8 +472,8 @@ def create_app(data_dir: Path) -> FastAPI:
                FROM definition_version dv
                LEFT JOIN definition_publication dp
                  ON dp.tenant_id=dv.tenant_id AND dp.definition_id=dv.definition_id AND dp.version=dv.version AND dp.effective_to IS NULL
-               WHERE dv.tenant_id=? ORDER BY dv.definition_id, dv.version""",
-            (tenant,),
+               WHERE dv.tenant_id=? ORDER BY dv.definition_id, dv.version LIMIT ? OFFSET ?""",
+            (tenant, limit, offset),
         ).fetchall()
         out = []
         for r in rows:
@@ -425,6 +488,7 @@ def create_app(data_dir: Path) -> FastAPI:
                 status = "proposed"
             out.append({**c, "metric_id": r["definition_id"], "version": r["version"],
                         "status": status})
+        response.headers["X-Total-Count"] = str(total)
         return out
 
     @app.post("/v1/metrics/definitions", status_code=201)
@@ -771,20 +835,37 @@ def create_app(data_dir: Path) -> FastAPI:
         return {"status": "answered", "stages": stages, "unit": body.get("unit", "hours"), "revision": rev_no, "evidence_ref": evidence_ref}
 
     @app.get("/v1/jobs/outbox")
-    async def outbox(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def outbox(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        rows = store.conn.execute("SELECT event_id,event_type,tenant_id,aggregate_id,aggregate_version,occurred_at,payload FROM outbox_event WHERE tenant_id=? ORDER BY occurred_at", (tenant,)).fetchall()
+        limit, offset = pagination
+        total = store.conn.execute("SELECT COUNT(*) c FROM outbox_event WHERE tenant_id=?", (tenant,)).fetchone()["c"]
+        rows = store.conn.execute(
+            "SELECT event_id,event_type,tenant_id,aggregate_id,aggregate_version,occurred_at,payload FROM outbox_event WHERE tenant_id=? ORDER BY occurred_at LIMIT ? OFFSET ?",
+            (tenant, limit, offset),
+        ).fetchall()
+        response.headers["X-Total-Count"] = str(total)
         return [dict(r) for r in rows]
 
     # ---- scenario & optimisation (M4, spec §17) ---------------------------
     @app.get("/v1/scenarios/templates")
-    async def scenario_templates():
+    async def scenario_templates(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+    ):
         from .optimization import SCENARIO_TEMPLATES
-        return [
+        limit, offset = pagination
+        all_tpls = [
             {"template_id": tid, "name": tpl["name"], "description": tpl["description"],
              "sections": tpl["sections"]}
             for tid, tpl in SCENARIO_TEMPLATES.items()
         ]
+        response.headers["X-Total-Count"] = str(len(all_tpls))
+        return all_tpls[offset : offset + limit]
 
     @app.post("/v1/scenarios/solve", status_code=200)
     async def scenario_solve(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -877,10 +958,19 @@ def create_app(data_dir: Path) -> FastAPI:
         return _decision_to_dict(rec)
 
     @app.get("/v1/decisions")
-    async def list_decisions_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_decisions_api(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        q: str | None = Query(default=None, description="Case-insensitive title substring filter"),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        from .register import list_decisions as _list
-        recs = _list(store.conn, tenant)
+        limit, offset = pagination
+        from .register import list_decisions as _list, count_decisions as _count
+        total = _count(store.conn, tenant, q=q)
+        recs = _list(store.conn, tenant, limit=limit, offset=offset, q=q)
+        response.headers["X-Total-Count"] = str(total)
         return [_decision_to_dict(r) for r in recs]
 
     @app.get("/v1/decisions/{decision_id}")
@@ -970,11 +1060,21 @@ def create_app(data_dir: Path) -> FastAPI:
         return res
 
     @app.get("/v1/decisions/{decision_id}/evidence")
-    async def list_decision_evidence_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_decision_evidence_api(
+        decision_id: str,
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        from .register import list_decision_evidence as _list_ev
+        limit, offset = pagination
+        from .register import list_decision_evidence as _list_ev, count_decision_evidence as _count_ev
         try:
-            return _list_ev(store.conn, tenant, decision_id)
+            total = _count_ev(store.conn, tenant, decision_id)
+            items = _list_ev(store.conn, tenant, decision_id, limit=limit, offset=offset)
+            response.headers["X-Total-Count"] = str(total)
+            return items
         except LookupError as e:
             raise HTTPException(404, str(e))
 
@@ -1064,10 +1164,18 @@ def create_app(data_dir: Path) -> FastAPI:
         return DataHealth.check(tenant, dataset_id, store)
 
     @app.get("/v1/monitoring/health")
-    async def monitoring_health_all(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def monitoring_health_all(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
         from .monitoring import DataHealth
-        return DataHealth.check_all(tenant, store)
+        all_health = DataHealth.check_all(tenant, store)
+        response.headers["X-Total-Count"] = str(len(all_health))
+        return all_health[offset : offset + limit]
 
     @app.post("/v1/monitoring/rules", status_code=201)
     async def monitoring_create_rule(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1082,13 +1190,21 @@ def create_app(data_dir: Path) -> FastAPI:
         return {"status": "created", "rule": rule}
 
     @app.get("/v1/monitoring/rules")
-    async def monitoring_list_rules(enabled_only: bool = False, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def monitoring_list_rules(
+        response: Response,
+        enabled_only: bool = False,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
         from .monitoring import AlertLifecycle
         rules = AlertLifecycle.list_rules(tenant, store)
         if enabled_only:
             rules = [r for r in rules if r["enabled"]]
-        return {"rules": rules}
+        response.headers["X-Total-Count"] = str(len(rules))
+        return {"rules": rules[offset : offset + limit]}
 
     @app.put("/v1/monitoring/rules/{rule_id}")
     async def monitoring_update_rule(rule_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1160,16 +1276,33 @@ def create_app(data_dir: Path) -> FastAPI:
         return {"status": "answered", "evaluated": len(fired), "anomalies_fired": len(fired), "episodes": fired}
 
     @app.get("/v1/monitoring/conditions")
-    async def monitoring_conditions(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def monitoring_conditions(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
         from .monitoring import AlertLifecycle
-        return {"conditions": AlertLifecycle.list_condition_states(tenant, store)}
+        conds = AlertLifecycle.list_condition_states(tenant, store)
+        response.headers["X-Total-Count"] = str(len(conds))
+        return {"conditions": conds[offset : offset + limit]}
 
     @app.get("/v1/monitoring/episodes")
-    async def monitoring_episodes(status: str | None = None, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def monitoring_episodes(
+        response: Response,
+        status: str | None = None,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
         from .monitoring import AlertLifecycle
-        return {"episodes": AlertLifecycle.list_episodes(tenant, store, status)}
+        eps = AlertLifecycle.list_episodes(tenant, store, status)
+        response.headers["X-Total-Count"] = str(len(eps))
+        return {"episodes": eps[offset : offset + limit]}
 
     @app.put("/v1/monitoring/episodes/{episode_id}/status")
     async def monitoring_transition_episode(episode_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1308,12 +1441,25 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.get("/v1/investigations")
     async def list_investigations_api(
-        status: str | None = None, owner: str | None = None, source_type: str | None = None,
-        x_tenant: str = Header(default=None), x_user: str = Header(default=None)
+        response: Response,
+        status: str | None = None,
+        owner: str | None = None,
+        source_type: str | None = None,
+        q: str | None = Query(default=None, description="Case-insensitive title substring filter"),
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
     ):
         tenant, _ = ctx(x_tenant, x_user)
-        from .investigations import list_investigations
-        return list_investigations(store, tenant, status=status, owner=owner, source_type=source_type)
+        limit, offset = pagination
+        from .investigations import list_investigations, count_investigations
+        total = count_investigations(store, tenant, status=status, owner=owner, source_type=source_type, q=q)
+        items = list_investigations(
+            store, tenant, status=status, owner=owner, source_type=source_type,
+            limit=limit, offset=offset, q=q,
+        )
+        response.headers["X-Total-Count"] = str(total)
+        return items
 
     @app.get("/v1/investigations/{investigation_id}")
     async def get_investigation_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1363,12 +1509,21 @@ def create_app(data_dir: Path) -> FastAPI:
             return api_error(422, "invalid_claim", "The claim request is missing required fields or has invalid values.")
 
     @app.get("/v1/investigations/{investigation_id}/claims")
-    async def list_claims_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_claims_api(
+        investigation_id: str,
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
         from .investigations import InvestigationError, get_investigation
         try:
             inv = get_investigation(store, tenant, investigation_id)
-            return inv["claims"]
+            claims = inv["claims"]
+            response.headers["X-Total-Count"] = str(len(claims))
+            return claims[offset : offset + limit]
         except InvestigationError:
             raise HTTPException(404, "not found")
 
@@ -1389,10 +1544,19 @@ def create_app(data_dir: Path) -> FastAPI:
     # Predictive Risk & Forecasting API (WP-04)
     # -----------------------------------------------------------------------
     @app.get("/v1/predictive/targets")
-    async def list_predictive_targets_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_predictive_targets_api(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        from .predictive import list_predictive_targets
-        return list_predictive_targets(store, tenant)
+        limit, offset = pagination
+        from .predictive import list_predictive_targets, count_predictive_targets
+        total = count_predictive_targets(store, tenant)
+        items = list_predictive_targets(store, tenant, limit=limit, offset=offset)
+        response.headers["X-Total-Count"] = str(total)
+        return items
 
     @app.post("/v1/predictive/targets", status_code=201)
     async def create_predictive_target_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1423,10 +1587,19 @@ def create_app(data_dir: Path) -> FastAPI:
             return api_error(422, "invalid_target_spec", str(e))
 
     @app.get("/v1/predictive/models")
-    async def list_predictive_models_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_predictive_models_api(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        from .predictive import list_predictive_models
-        return list_predictive_models(store, tenant)
+        limit, offset = pagination
+        from .predictive import list_predictive_models, count_predictive_models
+        total = count_predictive_models(store, tenant)
+        items = list_predictive_models(store, tenant, limit=limit, offset=offset)
+        response.headers["X-Total-Count"] = str(total)
+        return items
 
     @app.post("/v1/predictive/models", status_code=201)
     async def register_predictive_model_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1656,10 +1829,19 @@ def create_app(data_dir: Path) -> FastAPI:
         return {"semantic_pack": SUPPORT_OPERATIONS_SEMANTIC_PACK}
 
     @app.get("/v1/pilots")
-    async def list_pilots_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+    async def list_pilots_api(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
         tenant, _ = ctx(x_tenant, x_user)
-        from .pilot import list_pilots
-        return list_pilots(store, tenant)
+        limit, offset = pagination
+        from .pilot import list_pilots, count_pilots
+        total = count_pilots(store, tenant)
+        items = list_pilots(store, tenant, limit=limit, offset=offset)
+        response.headers["X-Total-Count"] = str(total)
+        return items
 
     @app.post("/v1/pilots", status_code=201)
     async def create_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):

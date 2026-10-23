@@ -181,10 +181,22 @@ def get_pilot(store: Store, tenant_id: str, pilot_id: str) -> dict[str, Any] | N
     return d
 
 
-def list_pilots(store: Store, tenant_id: str) -> list[dict[str, Any]]:
-    rows = store.conn.execute(
-        "SELECT * FROM pilot WHERE tenant_id=? ORDER BY created_at DESC",
+def count_pilots(store: Store, tenant_id: str) -> int:
+    return store.conn.execute(
+        "SELECT COUNT(*) c FROM pilot WHERE tenant_id=?",
         (tenant_id,),
+    ).fetchone()["c"]
+
+
+def list_pilots(
+    store: Store,
+    tenant_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM pilot WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (tenant_id, limit, offset),
     ).fetchall()
     res = []
     for r in rows:

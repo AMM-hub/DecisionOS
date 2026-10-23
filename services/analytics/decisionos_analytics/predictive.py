@@ -158,10 +158,22 @@ def get_predictive_target(store: Store, tenant_id: str, target_id: str) -> dict[
     return d
 
 
-def list_predictive_targets(store: Store, tenant_id: str) -> list[dict[str, Any]]:
-    rows = store.conn.execute(
-        "SELECT * FROM predictive_target WHERE tenant_id=? ORDER BY created_at DESC",
+def count_predictive_targets(store: Store, tenant_id: str) -> int:
+    return store.conn.execute(
+        "SELECT COUNT(*) c FROM predictive_target WHERE tenant_id=?",
         (tenant_id,),
+    ).fetchone()["c"]
+
+
+def list_predictive_targets(
+    store: Store,
+    tenant_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM predictive_target WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (tenant_id, limit, offset),
     ).fetchall()
     res = []
     for r in rows:
@@ -268,10 +280,22 @@ def get_predictive_model(store: Store, tenant_id: str, model_id: str) -> dict[st
     return d
 
 
-def list_predictive_models(store: Store, tenant_id: str) -> list[dict[str, Any]]:
-    rows = store.conn.execute(
-        "SELECT * FROM predictive_model WHERE tenant_id=? ORDER BY created_at DESC",
+def count_predictive_models(store: Store, tenant_id: str) -> int:
+    return store.conn.execute(
+        "SELECT COUNT(*) c FROM predictive_model WHERE tenant_id=?",
         (tenant_id,),
+    ).fetchone()["c"]
+
+
+def list_predictive_models(
+    store: Store,
+    tenant_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM predictive_model WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (tenant_id, limit, offset),
     ).fetchall()
     res = []
     for r in rows:

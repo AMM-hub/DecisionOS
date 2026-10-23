@@ -106,12 +106,42 @@ def create_investigation(
     return get_investigation(store, tenant_id, inv_id)
 
 
+def count_investigations(
+    store: Store,
+    tenant_id: str,
+    status: str | None = None,
+    owner: str | None = None,
+    source_type: str | None = None,
+    q: str | None = None,
+) -> int:
+    query = "SELECT COUNT(*) c FROM investigation WHERE tenant_id=?"
+    params: list[Any] = [tenant_id]
+
+    if status:
+        query += " AND status=?"
+        params.append(status)
+    if owner:
+        query += " AND owner=?"
+        params.append(owner)
+    if source_type:
+        query += " AND source_type=?"
+        params.append(source_type)
+    if q:
+        query += " AND LOWER(title) LIKE ?"
+        params.append(f"%{q.lower()}%")
+
+    return store.conn.execute(query, params).fetchone()["c"]
+
+
 def list_investigations(
     store: Store,
     tenant_id: str,
     status: str | None = None,
     owner: str | None = None,
     source_type: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    q: str | None = None,
 ) -> list[dict]:
     query = "SELECT * FROM investigation WHERE tenant_id=?"
     params: list[Any] = [tenant_id]
@@ -125,8 +155,12 @@ def list_investigations(
     if source_type:
         query += " AND source_type=?"
         params.append(source_type)
+    if q:
+        query += " AND LOWER(title) LIKE ?"
+        params.append(f"%{q.lower()}%")
 
-    query += " ORDER BY updated_at DESC"
+    query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     rows = store.conn.execute(query, params).fetchall()
 
     results = []

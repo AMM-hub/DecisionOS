@@ -254,11 +254,30 @@ def get_decision(conn, tenant_id: str, decision_id: str) -> DecisionRecord | Non
     return _row_to_record(row)
 
 
-def list_decisions(conn, tenant_id: str, limit: int = 50, offset: int = 0) -> list[DecisionRecord]:
-    rows = conn.execute(
-        "SELECT * FROM decision WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        (tenant_id, limit, offset),
-    ).fetchall()
+def count_decisions(conn, tenant_id: str, q: str | None = None) -> int:
+    query = "SELECT COUNT(*) c FROM decision WHERE tenant_id=?"
+    params: list[Any] = [tenant_id]
+    if q:
+        query += " AND LOWER(title) LIKE ?"
+        params.append(f"%{q.lower()}%")
+    return conn.execute(query, params).fetchone()["c"]
+
+
+def list_decisions(
+    conn,
+    tenant_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    q: str | None = None,
+) -> list[DecisionRecord]:
+    query = "SELECT * FROM decision WHERE tenant_id=?"
+    params: list[Any] = [tenant_id]
+    if q:
+        query += " AND LOWER(title) LIKE ?"
+        params.append(f"%{q.lower()}%")
+    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    rows = conn.execute(query, params).fetchall()
     return [_row_to_record(r) for r in rows]
 
 
@@ -368,7 +387,23 @@ def bind_evidence(
     }
 
 
-def list_decision_evidence(conn, tenant_id: str, decision_id: str) -> list[dict[str, Any]]:
+def count_decision_evidence(conn, tenant_id: str, decision_id: str) -> int:
+    rec = get_decision(conn, tenant_id, decision_id)
+    if rec is None:
+        raise LookupError(f"Decision {decision_id} not found")
+    return conn.execute(
+        "SELECT COUNT(*) c FROM decision_evidence_binding WHERE tenant_id=? AND decision_id=?",
+        (tenant_id, decision_id),
+    ).fetchone()["c"]
+
+
+def list_decision_evidence(
+    conn,
+    tenant_id: str,
+    decision_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     """List all evidence artifacts bound to a decision."""
     rec = get_decision(conn, tenant_id, decision_id)
     if rec is None:
@@ -382,8 +417,9 @@ def list_decision_evidence(conn, tenant_id: str, decision_id: str) -> list[dict[
         JOIN evidence_artifact e ON b.tenant_id = e.tenant_id AND b.evidence_id = e.id
         WHERE b.tenant_id=? AND b.decision_id=?
         ORDER BY b.bound_at ASC
+        LIMIT ? OFFSET ?
         """,
-        (tenant_id, decision_id),
+        (tenant_id, decision_id, limit, offset),
     ).fetchall()
 
     return [

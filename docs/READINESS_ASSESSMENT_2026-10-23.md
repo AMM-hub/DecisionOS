@@ -79,9 +79,17 @@ The app only runs because two dev servers happen to be up on this laptop.
 
 ### P1 — quality / credibility
 
-**P1-1 · `/risk` table escapes the viewport.** 9 columns, no scroll container: at 1366×768 the table
-extends to x=1462 and the `QUALITY / SUITABILITY` and `ACTIONS` columns are unreachable (in AR it
-overflows to x=-23). Measured on both locales.
+**P1-1 · `/risk` table: works, but poor affordance (CORRECTED — my first read was wrong).**
+The table is wrapped in `.table-scroll` (`overflow-x:auto`). Measured at 1366px: container client 951px,
+scroll 1189px, `documentElement` overflow **0** — it scrolls internally exactly as designed, so no column
+is unreachable, just off-screen until scrolled. What is genuinely weak: no scroll affordance (no fade or
+sticky CASE ID), 9 columns at 13px inside 951px, and the raw ISO deadline wraps across three lines.
+Downgraded from "broken" to "polish". My probe's `overflowers` heuristic flags legitimate scroll content
+— fixed in R6.
+**P1-1b · `/risk` ships hardcoded demo rows.** `pages/risk.vue` contains 12 hardcoded literals
+(`CASE-8021`, `2026-10-05T14:00:00Z`, `84.5% (calibrated)`…) used as a fallback when the predictive API
+returns nothing, rendered indistinguishably from live data. A demo that invents cases is worse than an
+empty state: it must become an explicit empty state or a visibly labelled "sample data" mode.
 **P1-2 · Raw ISO timestamps rendered inline** (`2026-10-05T14:00:00Z`) and wrapping mid-token across
 three lines in narrow cells.
 **P1-3 · Breadcrumb mismatch**: `/pilot` renders breadcrumb "Pilot Setup" above the heading

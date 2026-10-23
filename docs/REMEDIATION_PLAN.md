@@ -65,19 +65,23 @@ Every gate closes only on a green command listed under *Prove it*.
 
 ---
 
-## R4 · Frontend responsive & formatting  (P1-1, P1-2, P1-3)
+## R4 · Frontend correctness & polish  (P1-1, P1-1b, P1-2, P1-3)
 **Owner:** Antigravity · Sonnet 4.6 · **Scope:** `apps/web/pages/risk.vue`, `app.vue`, `composables/format.ts`
 
-1. Wrap the `/risk` table in a `.table-scroll` container (`overflow-x:auto`, `max-width:100%`) and pin
-   the CASE ID column; verify no page-level horizontal scroll.
-2. Format every timestamp through `format.ts` (`dd MMM yyyy, HH:mm` + relative age), never raw ISO;
-   keep numbers/IDs LTR in RTL mode.
-3. Fix the breadcrumb map so `/pilot` reads "Pilot Center".
-4. Re-run the sweep: `/risk` must report `overflow=0` at 1366×768 in EN and AR.
+0. **Correction:** `.table-scroll` already exists and works — measured 951px client vs 1189px scroll with
+   zero document overflow. Do NOT re-wrap. The table is *not* broken.
+1. **Remove the fabricated rows.** `pages/risk.vue` falls back to 12 hardcoded literals (CASE-8021 etc.)
+   when the predictive API returns no cases. Replace with the shared `.empty` state ("No cases scored yet
+   — connect a predictive target") plus a CTA. If a demo seed is wanted, gate it behind an explicit
+   `?demo=1` and label it visibly.
+2. **Make the horizontal scroll discoverable:** sticky CASE ID column and an edge fade while
+   `scrollWidth > clientWidth`.
+3. Format the SLA deadline through `formatDateTime(iso, locale)` — never render raw ISO; keep the value
+   LTR-isolated in RTL mode.
+4. Fix the breadcrumb map: `/pilot` must read "Pilot Center" (`nav.pilotDashboard`), not "Pilot Setup".
+5. Re-run the sweep: `/risk` reports no raw ISO, no `undefined`/`NaN`, 0 console errors in EN and AR.
 
-**Prove it:** `node scripts/ui_audit.mjs` → 0 overflow, 0 bad values, 0 console errors across 52 configs.
-
----
+**Prove it:** `node scripts/ui_audit.mjs` → 0 bad values, 0 console errors, 0 exceptions across 52 configs.
 
 ## R5 · Frontend test harness + CI  (P0-4, missing FE tests)
 **Owner:** Antigravity · Sonnet 4.6 · **Scope:** `apps/web`, `.github/workflows/ci.yml`
