@@ -207,6 +207,7 @@
 import { ref, onMounted } from 'vue'
 import { useApi } from '~/composables/api'
 import { useLocale, t } from '~/composables/locale'
+import { shortId, titleCase } from '~/composables/format'
 
 const { get, post } = useApi()
 const { locale } = useLocale()

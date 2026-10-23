@@ -112,7 +112,7 @@
               @click="openDecisionDrawer(dec)"
             >
               <td>
-                <span class="id isolate">{{ dec.id }}</span>
+                <span class="id isolate" :title="dec.id">{{ shortId(dec.id) }}</span>
               </td>
               <td>
                 <div class="cell-stack">
@@ -134,7 +134,7 @@
               <td>
                 <span class="status-cell" :data-tone="statusTone(dec.status)">
                   <span class="status-dot"></span>
-                  <span>{{ dec.status }}</span>
+                  <span>{{ titleCase(dec.status) }}</span>
                   <span v-if="isFrozen(dec.status)" class="chip plain" style="font-size: 9.5px; padding: 1px 5px; margin-inline-start: 4px;">
                     frozen
                   </span>
@@ -166,10 +166,10 @@
             </button>
           </div>
           <div class="row" style="margin-top: 8px; gap: 8px;">
-            <span class="id isolate">{{ selectedDecision.id }}</span>
+            <span class="id isolate" :title="selectedDecision.id">{{ shortId(selectedDecision.id) }}</span>
             <span class="chip" :data-tone="statusTone(selectedDecision.status)">
               <span class="d"></span>
-              {{ selectedDecision.status }}
+              {{ titleCase(selectedDecision.status) }}
             </span>
             <span v-if="isFrozen(selectedDecision.status)" class="chip" data-tone="warn">
               <span class="d"></span>
@@ -490,6 +490,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useLocale, t } from '~/composables/locale'
+import { formatDate, shortId, titleCase } from '~/composables/format'
 import type { DecisionRecord, DecisionEvidenceBinding } from '~/shared/types'
 
 const { locale } = useLocale()
@@ -574,10 +575,7 @@ function verdictTone(verdict: string): string {
   } as Record<string, string>)[verdict] || ''
 }
 
-function formatDate(iso: string): string {
-  if (!iso) return '—'
-  try { return new Date(iso).toLocaleDateString() } catch { return iso }
-}
+
 
 const filteredDecisions = computed(() => {
   return decisions.value.filter(d => {

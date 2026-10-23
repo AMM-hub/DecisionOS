@@ -1,6 +1,6 @@
 {
   "common": {
-    "appName": "ديسبن أو إس",
+    "appName": "DecisionOS",
     "appTagline": "التحليلات وذكاء القرارات",
     "loading": "جارٍ التحميل...",
     "error": "خطأ",
@@ -15,7 +15,8 @@
     "status": "الحالة",
     "actions": "إجراءات",
     "submit": "إرسال",
-    "close": "إغلاق"
+    "close": "إغلاق",
+    "tenantLabel": "المستأجر"
   },
   "nav": {
     "home": "الرئيسية",
@@ -31,7 +32,10 @@
     "risk": "المخاطر التشغيلية",
     "pilot": "إعداد التجربة",
     "pilotDashboard": "مركز التجربة",
-    "language": "اللغة"
+    "language": "اللغة",
+    "groupCommand": "القيادة",
+    "groupSignal": "الإشارات",
+    "groupData": "البيانات الأساسية"
   },
   "pilotSetup": {
     "title": "إعداد التجربة التشغيلية الموجهة",
@@ -45,7 +49,7 @@
     "bootstrappedSuccess": "تمت تهيئة البنية التحتية للتجربة بنجاح!"
   },
   "pilotCenter": {
-    "title": "مركز قيادة التجربة التشغيلية Executive Pilot Command Center",
+    "title": "مركز قيادة التجربة التشغيلية",
     "subtitle": "إدارة اتفاقيات مستوى الخدمة وطوابير الدعم — مركز القيادة والتقييم الموجه",
     "setupLink": "إعداد التجربة الموجه"
   },

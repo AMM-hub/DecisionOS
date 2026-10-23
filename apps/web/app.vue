@@ -104,7 +104,7 @@ function closeMobileNav() {
         <nav aria-label="Primary">
           <!-- Command Group -->
           <div class="nav-group">
-            <span class="nav-label">Command</span>
+            <span class="nav-label">{{ t('nav.groupCommand', locale) }}</span>
             <NuxtLink to="/pilot" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-gauge"/></svg>
               <span>{{ t('nav.pilotDashboard', locale) }}</span>
@@ -121,7 +121,7 @@ function closeMobileNav() {
 
           <!-- Signal Group -->
           <div class="nav-group">
-            <span class="nav-label">Signal</span>
+            <span class="nav-label">{{ t('nav.groupSignal', locale) }}</span>
             <NuxtLink to="/monitoring" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-pulse"/></svg>
               <span>{{ t('nav.monitoring', locale) }}</span>
@@ -146,7 +146,7 @@ function closeMobileNav() {
 
           <!-- Data Foundation Group -->
           <div class="nav-group">
-            <span class="nav-label">Data foundation</span>
+            <span class="nav-label">{{ t('nav.groupData', locale) }}</span>
             <NuxtLink to="/datasets" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-layers"/></svg>
               <span>{{ t('nav.datasets', locale) }}</span>
@@ -384,9 +384,9 @@ code,
   width: 30px; height: 30px; border-radius: var(--r); background: var(--surface-2);
   border: 1px solid var(--border); display: grid; place-items: center; color: var(--muted); flex: none;
 }
-.pilot-chip .pc-body { min-width: 0; }
-.pilot-chip .pc-name { font-size: 12.5px; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pilot-chip .pc-sub { font-family: var(--font-mono); font-size: 10px; color: var(--faint); letter-spacing: 0.02em; }
+.pilot-chip .pc-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+.pilot-chip .pc-name { display: block; font-size: 12.5px; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pilot-chip .pc-sub { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--faint); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Main Section */
 .main { min-width: 0; display: flex; flex-direction: column; }
@@ -517,8 +517,97 @@ code,
 .table-scroll { overflow-x: auto; width: 100%; }
 table.dt, table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.dt th, table.dt td, table th, table td {
-  height: 36px; padding: 6px 14px; text-align: start; border-bottom: 1px solid var(--border); vertical-align: middle;
+  height: auto; padding: 9px 14px; text-align: start; border-bottom: 1px solid var(--border); vertical-align: middle;
+  line-height: 1.35;
 }
+/* ---------------------------------------------------------------
+   Structural fixes: two-line cells, sidebar chip, empty states and
+   toolbar primitives that were referenced in templates but never
+   defined — their absence let inline children collide on one line.
+   --------------------------------------------------------------- */
+.cell-stack { display: flex; flex-direction: column; gap: 2px; min-width: 0; line-height: 1.3; }
+.cell-stack > * { display: block; min-width: 0; }
+.cell-strong {
+  font-weight: 600; color: var(--fg-strong); line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px;
+}
+td .cell-stack .muted {
+  font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px;
+}
+.chip .d, .badge .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; display: inline-block; }
+.chip.plain { background: transparent; border-color: var(--border); color: var(--muted); }
+
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: 8px; color: var(--fg);
+}
+.empty h3 { font-size: 15px; font-weight: 600; color: var(--fg-strong); }
+.empty p { font-size: 12.5px; max-width: 46ch; }
+.e-ico {
+  width: 52px; height: 52px; border-radius: var(--r-lg); display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); margin-bottom: 4px;
+}
+.e-ico svg { width: 22px; height: 22px; }
+
+.segmented {
+  display: inline-flex; align-items: center; padding: 2px; gap: 2px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r);
+}
+.segmented button {
+  padding: 4px 12px; font-size: 12px; font-weight: 550; color: var(--muted);
+  border-radius: calc(var(--r) - 2px); line-height: 1.4; white-space: nowrap;
+}
+.segmented button:hover { color: var(--fg); }
+.segmented button[aria-pressed="true"] {
+  background: var(--surface); color: var(--fg-strong); font-weight: 600;
+  box-shadow: var(--shadow-1);
+}
+
+.search-inline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.search-inline svg { width: 15px; height: 15px; color: var(--faint); flex: none; }
+.search-inline input { min-width: 200px; }
+
+.table-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px; font-size: 12px; color: var(--muted);
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+
+.titles { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 8px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.arrow { font-size: 10px; color: var(--faint); margin-inline-start: 2px; }
+.back-link {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+  color: var(--muted); margin-bottom: 6px;
+}
+.back-link:hover { color: var(--fg); }
+.kv { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 6px 14px; font-size: 12.5px; }
+.kv dt, .kv .k { color: var(--muted); }
+.factor-list { display: flex; flex-direction: column; gap: 6px; }
+.factor { display: flex; flex-direction: column; gap: 3px; }
+.fx-name { font-size: 11.5px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.fx-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+.fx-track { height: 4px; border-radius: var(--r-full); background: var(--surface-2); overflow: hidden; }
+.fx-track > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.metric-row { display: grid; grid-template-columns: 1.4fr repeat(3, minmax(56px, auto)); gap: 10px; align-items: center; }
+.metric-cell { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: end; font-size: 12.5px; }
+.mc-l { color: var(--muted); }
+.mc-s { font-size: 11px; color: var(--faint); }
+.mc-v { font-weight: 600; color: var(--fg-strong); }
+.cols-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.text-center { text-align: center; }
+.fld { display: flex; flex-direction: column; gap: 4px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.setup-form { display: flex; flex-direction: column; gap: 4px; max-width: 760px; }
+.bootstrap-complete {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--ok-soft); color: var(--ok-ink); font-size: 12.5px; font-weight: 550;
+}
+.inv-workspace, .investigation-detail-page, .investigations-page { min-width: 0; }
+
 table.dt thead th, table thead th {
   position: sticky; top: 0; z-index: 2; background: var(--surface-2); height: 34px;
   font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase;

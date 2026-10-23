@@ -15,7 +15,8 @@
     "status": "Status",
     "actions": "Actions",
     "submit": "Submit",
-    "close": "Close"
+    "close": "Close",
+    "tenantLabel": "tenant"
   },
   "nav": {
     "home": "Home",
@@ -31,7 +32,10 @@
     "risk": "Operational Risk",
     "pilot": "Pilot Setup",
     "pilotDashboard": "Pilot Center",
-    "language": "Language"
+    "language": "Language",
+    "groupCommand": "Command",
+    "groupSignal": "Signal",
+    "groupData": "Data foundation"
   },
   "pilotSetup": {
     "title": "Guided Operational Pilot Setup",
