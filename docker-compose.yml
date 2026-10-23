@@ -1,0 +1,25 @@
+name: decisionos
+
+services:
+  api:
+    build:
+      context: ./services/analytics
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./var:/app/var
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DECISIONOS_DATA_DIR: /app/var/worker
+
+  web:
+    build:
+      context: ./apps/web
+    ports:
+      - "3000:3000"
+    environment:
+      NUXT_PUBLIC_API_BASE: http://localhost:8100/v1
+    depends_on:
+      - api
