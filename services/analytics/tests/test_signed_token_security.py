@@ -80,7 +80,8 @@ def test_strict_mode_rejects_bare_unauthenticated_headers(auth_client, monkeypat
     assert "Cryptographically signed Bearer token required" in res.json()["detail"]
 
 
-def test_auth_token_issue_and_verify_endpoints(auth_client):
+def test_auth_token_issue_and_verify_endpoints(auth_client, monkeypatch):
+    monkeypatch.setenv("DECISIONOS_ALLOW_TOKEN_MINT", "1")
     issue_res = auth_client.post(
         "/v1/auth/token",
         json={"tenant_id": "tenant_alpha", "user_id": "alpha.manager", "role": "ops_manager"},

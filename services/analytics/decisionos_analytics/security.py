@@ -11,18 +11,46 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from typing import Any
 
 from fastapi import HTTPException
 
-# Master secret key for JWT HMAC-SHA256 signature verification
-DEFAULT_JWT_SECRET = "decisionos-production-control-plane-secret-key-32b-min"
-JWT_SECRET = os.environ.get("DECISIONOS_JWT_SECRET", DEFAULT_JWT_SECRET)
+# Master secret key resolution for JWT HMAC-SHA256 signature verification
+_DEV_RANDOM_SECRET: str | None = None
+
+
+def get_jwt_secret() -> str:
+    """Resolve active JWT secret according to security policy."""
+    strict = os.environ.get("DECISIONOS_AUTH_STRICT", "0") in ("1", "true", "yes")
+    secret = os.environ.get("DECISIONOS_JWT_SECRET", "").strip()
+    if strict:
+        if not secret or len(secret.encode("utf-8")) < 32:
+            raise RuntimeError(
+                "DECISIONOS_AUTH_STRICT=1 requires DECISIONOS_JWT_SECRET to be configured with at least 32 bytes."
+            )
+        return secret
+    if secret and len(secret.encode("utf-8")) >= 32:
+        return secret
+    global _DEV_RANDOM_SECRET
+    if _DEV_RANDOM_SECRET is None:
+        _DEV_RANDOM_SECRET = secrets.token_hex(32)
+    return _DEV_RANDOM_SECRET
+
+
+def __getattr__(name: str) -> Any:
+    if name == "JWT_SECRET":
+        return get_jwt_secret()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
 
 # Role definitions & RBAC permissions matrix
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "ops_manager": {"read", "write", "approve", "transition", "manage_pilot", "trigger_action"},
+    # ops_manager may author definitions as well as approve them; separation of duties
+    # (a modeler cannot approve their own proposal, §29 QA-018) is enforced on the
+    # approve path, not by withholding authorship.
+    "ops_manager": {"read", "write", "approve", "transition", "manage_pilot", "trigger_action", "metrics_manage"},
     "semantic_modeler": {"read", "write", "model_create", "metrics_manage"},
     "qa_operator": {"read", "write", "test_ingest", "simulate", "evaluate"},
     "viewer": {"read"},
@@ -43,9 +71,11 @@ def create_access_token(
     user_id: str,
     role: str = "ops_manager",
     expires_in_seconds: int = 86400,
-    secret_key: str = JWT_SECRET,
+    secret_key: str | None = None,
 ) -> str:
     """Generate a cryptographically signed HMAC-SHA256 JWT access token."""
+    if secret_key is None:
+        secret_key = get_jwt_secret()
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
     payload = {
@@ -71,9 +101,11 @@ def create_access_token(
 
 def verify_access_token(
     token: str,
-    secret_key: str = JWT_SECRET,
+    secret_key: str | None = None,
 ) -> dict[str, Any]:
     """Verify cryptographic signature and expiration of an access token."""
+    if secret_key is None:
+        secret_key = get_jwt_secret()
     parts = token.strip().split(".")
     if len(parts) != 3:
         raise ValueError("Malformed JWT token structure")
@@ -131,13 +163,15 @@ def authenticate_identity(
         token_user = claims["sub"]
         token_role = claims.get("role", "ops_manager")
 
-        # Reject cross-tenant header spoofing if client supplies contradictory X-Tenant
-        if x_tenant and x_tenant != token_tenant:
-            raise HTTPException(status_code=404, detail="not found")
+        # In strict mode: ignore X-Tenant / X-User entirely; identity comes only from the bearer JWT.
+        if not strict_auth:
+            # Reject cross-tenant header spoofing if client supplies contradictory X-Tenant in dev mode
+            if x_tenant and x_tenant != token_tenant:
+                raise HTTPException(status_code=404, detail="not found")
 
-        # Reject cross-user header spoofing if client supplies contradictory X-User
-        if x_user and x_user != token_user:
-            raise HTTPException(status_code=404, detail="not found")
+            # Reject cross-user header spoofing if client supplies contradictory X-User
+            if x_user and x_user != token_user:
+                raise HTTPException(status_code=404, detail="not found")
 
         return token_tenant, token_user, token_role
 

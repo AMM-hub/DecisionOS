@@ -9,6 +9,7 @@ The /v1 contract matches packages/contracts/openapi.yaml.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from contextvars import ContextVar
@@ -21,7 +22,13 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .security import authenticate_identity, create_access_token, verify_access_token
+from .security import (
+    authenticate_identity,
+    create_access_token,
+    get_jwt_secret,
+    has_permission,
+    verify_access_token,
+)
 from .execution import compile_plan, execute
 from .forecasting import (
     ForecastRefused,
@@ -80,6 +87,7 @@ def api_error(status: int, code: str, detail: str, extra: dict | None = None) ->
     return JSONResponse(status_code=status, content=body)
 
 def create_app(data_dir: Path) -> FastAPI:
+    get_jwt_secret()
     data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(data_dir / "control.sqlite3")
     objects = LocalObjectStore(data_dir / "objects")
@@ -147,6 +155,9 @@ def create_app(data_dir: Path) -> FastAPI:
     @app.post("/v1/auth/token")
     async def issue_token_api(request: Request):
         """Issue cryptographically signed JWT access token for tenant & user."""
+        allow_mint = os.environ.get("DECISIONOS_ALLOW_TOKEN_MINT", "0") in ("1", "true", "yes")
+        if not allow_mint:
+            return api_error(404, "not_found", "Token minting endpoint is disabled.")
         body = await request.json()
         tenant_id = body.get("tenant_id") or "tenant_alpha"
         user_id = body.get("user_id") or "alpha.manager"
@@ -173,18 +184,36 @@ def create_app(data_dir: Path) -> FastAPI:
             raise HTTPException(401, str(e))
         return {"status": "authenticated", "claims": claims}
 
-    def ctx(x_tenant: str | None = None, x_user: str | None = None) -> tuple[str, str]:
+    _current_auth_role: ContextVar[str] = ContextVar("current_auth_role", default="ops_manager")
+
+    def ctx(
+        x_tenant: str | None = None,
+        x_user: str | None = None,
+        permission: str | None = None,
+    ) -> tuple[str, str]:
         auth_hdr = _current_auth_header.get()
-        tenant, user, _ = authenticate_identity(
+        tenant, user, role = authenticate_identity(
             authorization=auth_hdr,
             x_tenant=x_tenant,
             x_user=x_user,
             demo_tenants=DEMO_TENANTS,
             demo_users=DEMO_USERS,
         )
+        _current_auth_role.set(role)
+
+        strict = os.environ.get("DECISIONOS_AUTH_STRICT", "0") in ("1", "true", "yes")
+        is_jwt_or_strict = bool(auth_hdr and auth_hdr.lower().startswith("bearer ")) or strict
+
+        if permission and is_jwt_or_strict:
+            if not has_permission(role, permission):
+                raise APIException(403, "forbidden", f"Role '{role}' lacks required permission '{permission}'.")
+
         return tenant, user
 
     def role_of(user: str) -> str:
+        role = _current_auth_role.get()
+        if role:
+            return role
         return DEMO_USERS.get(user, ("tenant_alpha", "ops_manager"))[1]
 
     # ---- uploads ------------------------------------------------------
@@ -195,7 +224,7 @@ def create_app(data_dir: Path) -> FastAPI:
         x_user: str = Header(default=None),
         idempotency_key: str | None = Header(default=None),
     ):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         if "filename" not in body:
             return api_error(422, "missing_field", "Field 'filename' is required.")
@@ -229,7 +258,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.put("/v1/uploads/{upload_id}/content")
     async def put_content(upload_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, _ = ctx(x_tenant, x_user)
+        tenant, _ = ctx(x_tenant, x_user, permission="write")
         row = store.conn.execute("SELECT * FROM upload WHERE tenant_id=? AND id=?", (tenant, upload_id)).fetchone()
         if row is None:
             raise HTTPException(404, "not found")
@@ -241,7 +270,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/uploads/{upload_id}/finalize")
     async def finalize(upload_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         row = store.conn.execute("SELECT * FROM upload WHERE tenant_id=? AND id=?", (tenant, upload_id)).fetchone()
         if row is None:
             raise HTTPException(404, "not found")
@@ -339,7 +368,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/datasets/{dataset_id}/grain-confirmation")
     async def confirm_grain(dataset_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         if "key_columns" not in body:
             return api_error(422, "missing_field", "Field 'key_columns' is required.")
@@ -358,7 +387,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/datasets/{dataset_id}/revisions/{revision}/publish")
     async def publish(dataset_id: str, revision: int, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         try:
             return publish_revision(store, tenant, dataset_id, revision, user)
         except LookupError:
@@ -400,7 +429,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/metrics/definitions", status_code=201)
     async def propose(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="metrics_manage")
         body = await request.json()
         defn = MetricDefinitionContent.model_validate(body)
         with store.conn:
@@ -415,7 +444,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/metrics/definitions/{metric_id}/approve")
     async def approve(metric_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="approve")
         if role_of(user) not in APPROVER_ROLES:
             return api_error(403, "approval_not_allowed", "This user role is not permitted to approve metric definitions.")
         body = await request.json()
@@ -439,7 +468,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/metrics/definitions/{metric_id}/withdraw")
     async def withdraw(metric_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="approve")
         if role_of(user) not in APPROVER_ROLES:
             return api_error(403, "withdraw_not_allowed", "This user role is not permitted to withdraw metric definitions.")
         body = await request.json()
@@ -554,7 +583,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/forecasts/train", status_code=201)
     async def forecast_train(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="model_create")
         body = await request.json()
         horizon = int(body.get("horizon", 14))
         frequency = body.get("frequency", "D")
@@ -762,7 +791,7 @@ def create_app(data_dir: Path) -> FastAPI:
         from .optimization import AllocationInputs, solve_allocation
 
         # ctx() validates both that x_user belongs to x_tenant (§23.4 cross-tenant isolation)
-        ctx(x_tenant, x_user)
+        ctx(x_tenant, x_user, permission="write")
 
         body = await request.json()
         template = body.get("template", "reallocate-capacity")
@@ -827,8 +856,7 @@ def create_app(data_dir: Path) -> FastAPI:
     # ---- decision register (M4, spec §19) ---------------------------------
     @app.post("/v1/decisions", status_code=201)
     async def create_decision_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        # ctx() validates both credentials and cross-tenant ownership (§23.4)
-        ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .register import (
             CounterevidenceCheck, CounterevidenceState,
@@ -841,40 +869,37 @@ def create_app(data_dir: Path) -> FastAPI:
                 CounterevidenceCheck(hypothesis=c["hypothesis"], state=CounterevidenceState(c["state"]), detail=c.get("detail"))
                 for c in body.get("counterevidence", [])
             ]
-            rec = _create(conn, x_tenant, body["title"], brief, x_user, counterevidence=ce)
+            rec = _create(conn, tenant, body["title"], brief, user, counterevidence=ce)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             _api_logger.exception("invalid decision payload: %s", e)
             return api_error(422, "invalid_decision", "The decision request is missing required fields or contains invalid values.")
-        store.audit(x_tenant, x_user, "decision.create", rec.id, "created", {"title": body["title"]})
+        store.audit(tenant, user, "decision.create", rec.id, "created", {"title": body["title"]})
         return _decision_to_dict(rec)
 
     @app.get("/v1/decisions")
     async def list_decisions_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        # ctx() validates both credentials and cross-tenant ownership (§23.4)
-        ctx(x_tenant, x_user)
+        tenant, _ = ctx(x_tenant, x_user)
         from .register import list_decisions as _list
-        recs = _list(store.conn, x_tenant)
+        recs = _list(store.conn, tenant)
         return [_decision_to_dict(r) for r in recs]
 
     @app.get("/v1/decisions/{decision_id}")
     async def get_decision_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        # ctx() validates both credentials and cross-tenant ownership (§23.4)
-        ctx(x_tenant, x_user)
+        tenant, _ = ctx(x_tenant, x_user)
         from .register import get_decision as _get
-        rec = _get(store.conn, x_tenant, decision_id)
+        rec = _get(store.conn, tenant, decision_id)
         if rec is None:
             raise HTTPException(404, "not found")  # §23.4
         return _decision_to_dict(rec)
 
     @app.post("/v1/decisions/{decision_id}/transition")
     async def transition_decision_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        # ctx() validates both credentials and cross-tenant ownership (§23.4)
-        ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="transition")
         body = await request.json()
         from .register import transition_status
         try:
             status_val = body.get("status", "")
-            rec = transition_status(store.conn, x_tenant, decision_id, status_val, x_user, body.get("reason", ""))
+            rec = transition_status(store.conn, tenant, decision_id, status_val, user, body.get("reason", ""))
         except (KeyError, TypeError) as e:
             _api_logger.exception("decision transition missing field: %s", e)
             return api_error(422, "missing_field", f"Missing required field: {e}")
@@ -886,13 +911,12 @@ def create_app(data_dir: Path) -> FastAPI:
         except LookupError as e:
             _api_logger.exception("decision not found: %s", e)
             raise HTTPException(404, "not found")
-        store.audit(x_tenant, x_user, "decision.transition", decision_id, "success", {"to_status": body["status"]})
+        store.audit(tenant, user, "decision.transition", decision_id, "success", {"to_status": body["status"]})
         return _decision_to_dict(rec)
 
     @app.post("/v1/decisions/{decision_id}/outcome")
     async def outcome_decision_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        # ctx() validates both credentials and cross-tenant ownership (§23.4)
-        ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .register import OutcomeRecord, Verdict, record_outcome
         try:
@@ -910,7 +934,7 @@ def create_app(data_dir: Path) -> FastAPI:
                 review_verdict=Verdict(body["review_verdict"]),
                 verdict_evidence=body.get("verdict_evidence", ""),
             )
-            rec = record_outcome(store.conn, x_tenant, decision_id, outcome, x_user, body.get("reason", "Evaluated"))
+            rec = record_outcome(store.conn, tenant, decision_id, outcome, user, body.get("reason", "Evaluated"))
         except (KeyError, TypeError) as e:
             _api_logger.exception("invalid outcome payload missing field: %s", e)
             return api_error(422, "missing_field", f"Missing required field: {e}")
@@ -920,19 +944,19 @@ def create_app(data_dir: Path) -> FastAPI:
         except LookupError as e:
             _api_logger.exception("outcome decision not found: %s", e)
             raise HTTPException(404, "not found")
-        store.audit(x_tenant, x_user, "decision.outcome", decision_id, "recorded", {"verdict": body["review_verdict"]})
+        store.audit(tenant, user, "decision.outcome", decision_id, "recorded", {"verdict": body["review_verdict"]})
         return _decision_to_dict(rec)
 
     @app.post("/v1/decisions/{decision_id}/evidence", status_code=201)
     async def bind_decision_evidence_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .register import BindingRole, bind_evidence as _bind
         try:
             if "evidence_id" not in body:
                 return api_error(422, "missing_field", "Field 'evidence_id' is required.")
             role = BindingRole(body.get("binding_role", "primary_support"))
-            res = _bind(store.conn, x_tenant, decision_id, body["evidence_id"], role, x_user)
+            res = _bind(store.conn, tenant, decision_id, body["evidence_id"], role, user)
         except (KeyError, TypeError) as e:
             _api_logger.exception("invalid evidence binding missing field: %s", e)
             return api_error(422, "missing_field", f"Missing required field: {e}")
@@ -942,15 +966,15 @@ def create_app(data_dir: Path) -> FastAPI:
         except LookupError as e:
             _api_logger.exception("bind evidence not found: %s", e)
             raise HTTPException(404, "not found")
-        store.audit(x_tenant, x_user, "decision.bind_evidence", decision_id, "bound", {"evidence_id": body["evidence_id"], "role": role.value})
+        store.audit(tenant, user, "decision.bind_evidence", decision_id, "bound", {"evidence_id": body["evidence_id"], "role": role.value})
         return res
 
     @app.get("/v1/decisions/{decision_id}/evidence")
     async def list_decision_evidence_api(decision_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        ctx(x_tenant, x_user)
+        tenant, _ = ctx(x_tenant, x_user)
         from .register import list_decision_evidence as _list_ev
         try:
-            return _list_ev(store.conn, x_tenant, decision_id)
+            return _list_ev(store.conn, tenant, decision_id)
         except LookupError as e:
             raise HTTPException(404, str(e))
 
@@ -1006,7 +1030,7 @@ def create_app(data_dir: Path) -> FastAPI:
     # ---- simulation (M4.3, spec §17.5) ------------------------------------
     @app.post("/v1/simulations/run")
     async def simulation_run(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="simulate")
         body = await request.json()
         if not body or "num_servers" not in body:
             return api_error(422, "invalid_simulation_config", "Field 'num_servers' is required.")
@@ -1047,7 +1071,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/monitoring/rules", status_code=201)
     async def monitoring_create_rule(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .monitoring import AlertLifecycle
         try:
@@ -1068,7 +1092,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.put("/v1/monitoring/rules/{rule_id}")
     async def monitoring_update_rule(rule_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .monitoring import AlertLifecycle
         try:
@@ -1086,7 +1110,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/monitoring/evaluate")
     async def monitoring_evaluate(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .monitoring import AlertEngine
         store.conn.executescript("""
@@ -1149,7 +1173,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.put("/v1/monitoring/episodes/{episode_id}/status")
     async def monitoring_transition_episode(episode_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="transition")
         body = await request.json()
         from .monitoring import AlertLifecycle
         try:
@@ -1198,7 +1222,7 @@ def create_app(data_dir: Path) -> FastAPI:
     # ---- evidence artifacts (D2, spec §10, §16) ---------------------------
     @app.post("/v1/evidence", status_code=201)
     async def create_evidence_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .evidence import EvidenceError, EvidenceType, SupportStatus, capture_evidence
         try:
@@ -1264,7 +1288,7 @@ def create_app(data_dir: Path) -> FastAPI:
     # ---- investigations (D2, spec §10, §14, §15) --------------------------
     @app.post("/v1/investigations", status_code=201)
     async def create_investigation_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .investigations import InvestigationError, SourceType, create_investigation
         try:
@@ -1302,7 +1326,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/investigations/{investigation_id}/status")
     async def update_investigation_status_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="transition")
         body = await request.json()
         from .investigations import InvestigationError, InvestigationStatus, update_investigation_status
         try:
@@ -1318,7 +1342,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/investigations/{investigation_id}/claims", status_code=201)
     async def add_claim_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .evidence import EvidenceType, SupportStatus
         from .investigations import InvestigationError, add_claim
@@ -1350,7 +1374,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/monitoring/episodes/{episode_id}/investigate")
     async def episode_investigate_api(episode_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         from .investigations import InvestigationError, investigate_episode
         try:
             inv, created = investigate_episode(store, tenant, episode_id, user)
@@ -1372,7 +1396,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/predictive/targets", status_code=201)
     async def create_predictive_target_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="model_create")
         body = await request.json()
         if "name" not in body:
             return api_error(422, "missing_field", "Field 'name' is required.")
@@ -1406,7 +1430,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/predictive/models", status_code=201)
     async def register_predictive_model_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="model_create")
         body = await request.json()
         for req_field in ("target_id", "algorithm", "training_time_range", "evaluation_time_range"):
             if req_field not in body:
@@ -1437,7 +1461,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/predictive/models/{model_id}/transition")
     async def transition_model_status_api(model_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="transition")
         body = await request.json()
         target_status = body.get("status")
         from .predictive import transition_model_status
@@ -1455,7 +1479,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/predictive/score")
     async def score_predictive_case_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         model_id = body.get("model_id")
         case_id = body.get("case_id")
@@ -1546,7 +1570,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/predictive/predictions/{prediction_id}/evidence", status_code=201)
     async def create_prediction_evidence_api(prediction_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         investigation_id = body.get("investigation_id")
 
@@ -1639,7 +1663,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots", status_code=201)
     async def create_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         if "name" not in body:
             return api_error(422, "missing_field", "Field 'name' is required.")
@@ -1676,7 +1700,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/status")
     async def update_pilot_status_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="transition")
         body = await request.json()
         target_status = body.get("status")
         from .pilot import update_pilot_status
@@ -1694,7 +1718,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/validate-data")
     async def validate_pilot_data_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, _ = ctx(x_tenant, x_user)
+        tenant, _ = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot, validate_pilot_data_readiness
         pilot = get_pilot(store, tenant, pilot_id)
@@ -1731,7 +1755,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/refresh")
     async def refresh_pilot_dataset_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot
         pilot = get_pilot(store, tenant, pilot_id)
@@ -1853,7 +1877,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/bootstrap", status_code=201)
     async def bootstrap_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import create_pilot, update_pilot_status, PilotStatus
         from .predictive import create_predictive_target, register_predictive_model
@@ -1908,7 +1932,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/mapping")
     async def configure_pilot_mapping_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot, update_pilot_config, analyze_workflow_mapping
         pilot = get_pilot(store, tenant, pilot_id)
@@ -1934,7 +1958,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/sla")
     async def configure_pilot_sla_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot, update_pilot_config
         pilot = get_pilot(store, tenant, pilot_id)
@@ -1955,7 +1979,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/monitoring-rules")
     async def create_pilot_monitoring_rule_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot, update_pilot_config
         from .monitoring import AlertLifecycle
@@ -1984,7 +2008,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/risk-target")
     async def configure_pilot_risk_target_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
+        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot, update_pilot_config
         from .predictive import create_predictive_target, register_predictive_model
