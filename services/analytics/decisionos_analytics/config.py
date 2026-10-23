@@ -1,6 +1,6 @@
 """Resource and safety limits for bounded workers (spec §8.2, §28)."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

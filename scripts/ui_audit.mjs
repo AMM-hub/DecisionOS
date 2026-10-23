@@ -105,9 +105,26 @@ const PROBE = `(() => {
     }
   }
 
-  const txt = document.body.innerText || '';
-  for (const bad of ['undefined', 'NaN', '[object Object]', 'null', 'Infinity', 'Invalid Date']) {
-    if (txt.includes(bad)) out.badValues.push(bad);
+  // Renderable text only, excluding <code> snippets (metric/query literals are not UI values).
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  // Cheap visible-text collection: body.innerText, with code/pre content stripped
+  // (metric definitions legitimately contain tokens like "is_not_null").
+  let txt = document.body.innerText || '';
+  for (const el of document.querySelectorAll('code, pre, script, style')) {
+    const t = el.innerText;
+    if (t) txt = txt.split(t).join(' ');
+  }
+  // Whole-token matching: letters, digits and underscore are token characters.
+  const badPatterns = [
+    ['undefined', /(?<![A-Za-z0-9_])undefined(?![A-Za-z0-9_])/],
+    ['NaN', /(?<![A-Za-z0-9_])NaN(?![A-Za-z0-9_])/],
+    ['[object Object]', /(?<![A-Za-z0-9_])\\[object Object\\](?![A-Za-z0-9_])/],
+    ['null', /(?<![A-Za-z0-9_])null(?![A-Za-z0-9_])/],
+    ['Infinity', /(?<![A-Za-z0-9_])Infinity(?![A-Za-z0-9_])/],
+    ['Invalid Date', /(?<![A-Za-z0-9_])Invalid Date(?![A-Za-z0-9_])/],
+  ];
+  for (const [label, re] of badPatterns) {
+    if (re.test(txt)) out.badValues.push(label);
   }
 
   for (const img of document.querySelectorAll('img')) {

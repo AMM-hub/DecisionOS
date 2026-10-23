@@ -7,15 +7,11 @@ launch linkage from monitoring episodes and workflow bottlenecks.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from .evidence import EvidenceType, SupportStatus
 from .store import Store, new_id, now_iso
-
 
 # ---------------------------------------------------------------------------
 # Enums

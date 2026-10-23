@@ -27,23 +27,35 @@
 
 ## Quick Start
 
-### Python Analytics API (runnable today)
+### Docker Compose (API + web)
+
+```bash
+cp .env.example .env    # set secrets; strict auth is opt-in (see PROJECT.md, Runtime Security)
+docker compose up --build
+```
+
+- API: `http://localhost:8100/v1`
+- Web: `http://localhost:3000`
+
+`.env.example` documents `DECISIONOS_AUTH_STRICT`, `DECISIONOS_JWT_SECRET`,
+`DECISIONOS_ALLOW_TOKEN_MINT`, and `DECISIONOS_DATA_DIR`. With strict auth on, the
+API refuses to boot unless the JWT secret is at least 32 bytes, and token minting
+stays disabled unless explicitly enabled.
+
+### Local development (without Docker)
 
 ```bash
 cd services/analytics
 
-# Activate virtual environment (Python 3.14+)
-.venv/Scripts/python -m pip install -e .
-.venv/Scripts/python -m pip install -r requirements.txt   # if present, else above covers it
+# Install the package and test tools (Python 3.12+)
+.venv/Scripts/python -m pip install -e ".[dev]"
 
-# Run ALL 173 tests
-PYTHONPATH="" .venv/Scripts/python -m pytest tests/ --basetemp=.ptmp -v
+# Run the backend suite
+env -u PYTHONPATH .venv/Scripts/python -m pytest tests -q
 
-# Start the API server (demo stand-in for the Laravel API)
-.venv/Scripts/python -m uvicorn decisionos_analytics.api:create_app --factory --port 8100
+# Start the API server
+env -u PYTHONPATH .venv/Scripts/python -m uvicorn decisionos_analytics.api:create_app --factory --port 8100
 ```
-
-### Frontend (Nuxt 3)
 
 ```bash
 cd apps/web
@@ -66,7 +78,8 @@ DecisionOS/
 │   │   ├── composables/            # useApi, useLocale (i18n)
 │   │   ├── locales/                # en.json, ar.json — 98 translation keys each
 │   │   └── shared/types.ts         # TypeScript interfaces mirroring the API contract
-│   └── api/                        # Laravel 13 API skeleton (requires PHP/Composer)
+├── archive/
+│   └── apps-api/                   # Archived Laravel 13 skeleton (superseded; see its README)
 ├── services/
 │   └── analytics/                  # Python bounded workers: FastAPI + Polars + Pydantic
 │       ├── decisionos_analytics/   # Core modules

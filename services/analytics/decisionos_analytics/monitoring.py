@@ -9,12 +9,10 @@ minimum effect size, persistence requirements, and seasonal MAD ranges.
 from __future__ import annotations
 
 import json
-import math
 import statistics
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 
 def _new_id() -> str:
@@ -22,7 +20,7 @@ def _new_id() -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +73,7 @@ class DataHealth:
         created = latest["created_at"]
         try:
             dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-            freshness = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+            freshness = (datetime.now(UTC) - dt).total_seconds() / 3600
         except (ValueError, TypeError):
             freshness = None
 
@@ -194,7 +192,6 @@ class ContextualDetector:
                 # residual_detection: simple moving-average residual
                 window = min(i, season_length)
                 mu = sum(before[-window:]) / window if window > 0 else 0
-                resid = obs - mu
                 std = (
                     statistics.stdev(before[-window:])
                     if len(before) >= 2
@@ -628,5 +625,5 @@ def _load_metric_series(tenant: str, dataset_id: str, metric_id: str, store) -> 
             counts = df.group_by(time_cols[0]).agg(pl.len().alias("cnt"))
             return [float(v) for v in counts["cnt"].to_list()]
         raise LookupError("no suitable columns for series")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - converts any store/parquet failure into a LookupError
         raise LookupError(f"cannot load series: {e}")

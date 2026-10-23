@@ -16,12 +16,10 @@ Design principles (from spec):
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import pulp as plp
@@ -278,7 +276,7 @@ def solve_allocation(
             bound_val = prob.solver.model.getObjBound()  # type: ignore[union-attr]
             if bound_val is not None and obj_val != 0:
                 gap_val = abs(obj_val - bound_val) / abs(obj_val)
-        except Exception as _gap_exc:  # DOS-QA-008: log, do not silently swallow
+        except Exception as _gap_exc:  # noqa: BLE001 - best-effort solver gap; logged, not swallowed
             logging.getLogger(__name__).debug("bound/gap unavailable: %s", _gap_exc)
 
     infeas_report = None
@@ -289,7 +287,7 @@ def solve_allocation(
                 "method": "IIS",
                 "conflict_constraints": [str(c) for c in infeas],
             }
-        except Exception:
+        except Exception:  # noqa: BLE001 - IIS is optional; fall back to a safe report
             # fallback: mark all constraints as suspect
             infeas_report = {"method": "fallback", "note": "IIS unavailable"}
 

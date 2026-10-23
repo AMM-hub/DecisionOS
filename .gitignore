@@ -18,6 +18,6 @@ __pycache__/
 services/analytics/.tmp/
 *.sqlite
 .coverage
-apps/api/storage/framework/views/
-apps/api/bootstrap/cache/
+archive/apps-api/storage/framework/views/
+archive/apps-api/bootstrap/cache/
 .agents/

@@ -20,10 +20,10 @@ Validation guarantees exercised by tests (§17.5):
 
 from __future__ import annotations
 
-import math
 import random
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 import simpy
 
@@ -63,7 +63,7 @@ class SimulationConfig:
     seed: int | None = 42
 
     @classmethod
-    def from_dict(cls, body: dict[str, Any]) -> "SimulationConfig":
+    def from_dict(cls, body: dict[str, Any]) -> SimulationConfig:
         schedule = body.get("arrival_schedule")
         if schedule is not None and not isinstance(schedule, list):
             raise SimulationError("arrival_schedule must be a list of {from_t, rate}")
@@ -186,7 +186,7 @@ class SimulationResult:
 
 
 class _Case:
-    __slots__ = ("arrival_time", "priority", "service_start", "end")
+    __slots__ = ("arrival_time", "end", "priority", "service_start")
 
     def __init__(self, arrival_time: float, priority: int):
         self.arrival_time = arrival_time

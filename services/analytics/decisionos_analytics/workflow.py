@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import polars as pl
@@ -126,7 +126,7 @@ def _as_frame(log) -> pl.DataFrame:
                 if isinstance(ts, pd.Timestamp):
                     ts = ts.to_pydatetime()
                 if ts is not None and ts.tzinfo is not None:
-                    ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+                    ts = ts.astimezone(UTC).replace(tzinfo=None)
                 rows.append((str(cid), str(ev.get(PM_EVENT)), ts))
         f = pl.DataFrame(rows, schema={CASE_COL: pl.Utf8, EVENT_COL: pl.Utf8, TS_COL: pl.Datetime}, orient="row")
         f = f.drop_nulls().sort([CASE_COL, TS_COL])

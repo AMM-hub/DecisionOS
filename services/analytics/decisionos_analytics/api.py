@@ -8,20 +8,20 @@ The /v1 contract matches packages/contracts/openapi.yaml.
 
 from __future__ import annotations
 
+import io
 import json
 import os
-import shutil
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
-
-import io
+from typing import Any
 
 import polars as pl
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
 
 def page_params(
     limit: int = Query(50, ge=1, le=500, description="Page limit (1-500)"),
@@ -30,6 +30,22 @@ def page_params(
     return limit, offset
 
 
+from .execution import compile_plan, execute
+from .forecasting import (
+    ForecastRefused,
+    build_metric_series,
+    check_suitability,
+    train_model,
+)
+from .forecasting import (
+    evaluate as forecast_evaluate,
+)
+from .forecasting import (
+    predict as forecast_predict,
+)
+from .grain import grain_candidates
+from .objectstore import LocalObjectStore
+from .pipeline import process_upload, publish_revision, sweep_expired_leases
 from .security import (
     authenticate_identity,
     create_access_token,
@@ -37,28 +53,18 @@ from .security import (
     has_permission,
     verify_access_token,
 )
-from .execution import compile_plan, execute
-from .forecasting import (
-    ForecastRefused,
-    build_metric_series,
-    check_suitability,
-    evaluate as forecast_evaluate,
-    predict as forecast_predict,
-    train_model,
-)
-from .grain import grain_candidates
-from .objectstore import LocalObjectStore
-from .pipeline import process_upload, publish_revision, sweep_expired_leases
 from .semantics import MetricDefinitionContent, MetricQueryRequest
 from .store import Store, new_id, now_iso
 from .workflow import (
     WorkflowError,
     bottleneck_analysis,
-    case_metrics as workflow_case_metrics,
     conformance_checking,
     load_event_log,
     throughput_times,
     variant_analysis,
+)
+from .workflow import (
+    case_metrics as workflow_case_metrics,
 )
 
 DEMO_TENANTS = {"tenant_alpha", "tenant_beta"}
@@ -228,9 +234,8 @@ def create_app(data_dir: Path) -> FastAPI:
         strict = os.environ.get("DECISIONOS_AUTH_STRICT", "0") in ("1", "true", "yes")
         is_jwt_or_strict = bool(auth_hdr and auth_hdr.lower().startswith("bearer ")) or strict
 
-        if permission and is_jwt_or_strict:
-            if not has_permission(role, permission):
-                raise APIException(403, "forbidden", f"Role '{role}' lacks required permission '{permission}'.")
+        if permission and is_jwt_or_strict and not has_permission(role, permission):
+            raise APIException(403, "forbidden", f"Role '{role}' lacks required permission '{permission}'.")
 
         return tenant, user
 
@@ -294,7 +299,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/uploads/{upload_id}/finalize")
     async def finalize(upload_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user, permission="write")
+        tenant, _user = ctx(x_tenant, x_user, permission="write")
         row = store.conn.execute("SELECT * FROM upload WHERE tenant_id=? AND id=?", (tenant, upload_id)).fetchone()
         if row is None:
             raise HTTPException(404, "not found")
@@ -899,6 +904,7 @@ def create_app(data_dir: Path) -> FastAPI:
             return api_error(422, "invalid_inputs", "Scenario solver inputs are invalid or missing required fields.")
 
         import logging
+
         import pulp as plp
 
         try:
@@ -940,8 +946,12 @@ def create_app(data_dir: Path) -> FastAPI:
         tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         from .register import (
-            CounterevidenceCheck, CounterevidenceState,
-            DecisionBrief, create_decision as _create,
+            CounterevidenceCheck,
+            CounterevidenceState,
+            DecisionBrief,
+        )
+        from .register import (
+            create_decision as _create,
         )
         try:
             conn = store.conn
@@ -967,7 +977,8 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, _ = ctx(x_tenant, x_user)
         limit, offset = pagination
-        from .register import list_decisions as _list, count_decisions as _count
+        from .register import count_decisions as _count
+        from .register import list_decisions as _list
         total = _count(store.conn, tenant, q=q)
         recs = _list(store.conn, tenant, limit=limit, offset=offset, q=q)
         response.headers["X-Total-Count"] = str(total)
@@ -1041,7 +1052,8 @@ def create_app(data_dir: Path) -> FastAPI:
     async def bind_decision_evidence_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
-        from .register import BindingRole, bind_evidence as _bind
+        from .register import BindingRole
+        from .register import bind_evidence as _bind
         try:
             if "evidence_id" not in body:
                 return api_error(422, "missing_field", "Field 'evidence_id' is required.")
@@ -1069,7 +1081,8 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, _ = ctx(x_tenant, x_user)
         limit, offset = pagination
-        from .register import list_decision_evidence as _list_ev, count_decision_evidence as _count_ev
+        from .register import count_decision_evidence as _count_ev
+        from .register import list_decision_evidence as _list_ev
         try:
             total = _count_ev(store.conn, tenant, decision_id)
             items = _list_ev(store.conn, tenant, decision_id, limit=limit, offset=offset)
@@ -1079,7 +1092,6 @@ def create_app(data_dir: Path) -> FastAPI:
             raise HTTPException(404, str(e))
 
     def _decision_to_dict(rec) -> dict:
-        from .register import DecisionRecord
         return {
             "id": rec.id,
             "tenant_id": rec.tenant_id,
@@ -1227,7 +1239,6 @@ def create_app(data_dir: Path) -> FastAPI:
     @app.post("/v1/monitoring/evaluate")
     async def monitoring_evaluate(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user, permission="write")
-        body = await request.json()
         from .monitoring import AlertEngine
         store.conn.executescript("""
             CREATE TABLE IF NOT EXISTS alert_rule (
@@ -1269,7 +1280,7 @@ def create_app(data_dir: Path) -> FastAPI:
         """)
         store.conn.commit()
         fired = AlertEngine.evaluate_rules(tenant, store, store.conn)
-        evidence_ref = store.save_evidence(tenant, "monitoring_evaluate", {
+        store.save_evidence(tenant, "monitoring_evaluate", {
             "rules_evaluated": len(fired), "anomalies_fired": len(fired)})
         store.audit(tenant, user, "monitoring.evaluate", tenant, "answered",
                      {"evaluated": len(fired), "fired": len(fired)})
@@ -1327,9 +1338,10 @@ def create_app(data_dir: Path) -> FastAPI:
     # ---- bilingual search (M6, spec §27) ------------
     @app.get("/v1/bilingual/labels")
     async def bilingual_labels(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, _ = ctx(x_tenant, x_user)
+        _tenant, _ = ctx(x_tenant, x_user)
         from .bilingual import (
-            BILLINGUAL_METRIC_LABELS, BILLINGUAL_DATASET_LABELS,
+            BILLINGUAL_DATASET_LABELS,
+            BILLINGUAL_METRIC_LABELS,
             BILLINGUAL_STATUS_LABELS,
         )
         return {
@@ -1340,11 +1352,11 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/bilingual/search")
     async def bilingual_search(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, _ = ctx(x_tenant, x_user)
+        _tenant, _ = ctx(x_tenant, x_user)
         body = await request.json()
         query = body.get("query", "")
         locale = body.get("locale", "en")
-        from .bilingual import search_match, normalize_search, BILLINGUAL_METRIC_LABELS, get_label
+        from .bilingual import BILLINGUAL_METRIC_LABELS, get_label, normalize_search, search_match
         results = []
         for metric_id, labels in BILLINGUAL_METRIC_LABELS.items():
             aliases = {"en": [labels.get("en", "")], "ar": [labels.get("ar", "")] if "ar" in labels else []}
@@ -1452,7 +1464,7 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, _ = ctx(x_tenant, x_user)
         limit, offset = pagination
-        from .investigations import list_investigations, count_investigations
+        from .investigations import count_investigations, list_investigations
         total = count_investigations(store, tenant, status=status, owner=owner, source_type=source_type, q=q)
         items = list_investigations(
             store, tenant, status=status, owner=owner, source_type=source_type,
@@ -1552,7 +1564,7 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, _ = ctx(x_tenant, x_user)
         limit, offset = pagination
-        from .predictive import list_predictive_targets, count_predictive_targets
+        from .predictive import count_predictive_targets, list_predictive_targets
         total = count_predictive_targets(store, tenant)
         items = list_predictive_targets(store, tenant, limit=limit, offset=offset)
         response.headers["X-Total-Count"] = str(total)
@@ -1595,7 +1607,7 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, _ = ctx(x_tenant, x_user)
         limit, offset = pagination
-        from .predictive import list_predictive_models, count_predictive_models
+        from .predictive import count_predictive_models, list_predictive_models
         total = count_predictive_models(store, tenant)
         items = list_predictive_models(store, tenant, limit=limit, offset=offset)
         response.headers["X-Total-Count"] = str(total)
@@ -1652,7 +1664,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/predictive/score")
     async def score_predictive_case_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user, permission="write")
+        tenant, _user = ctx(x_tenant, x_user, permission="write")
         body = await request.json()
         model_id = body.get("model_id")
         case_id = body.get("case_id")
@@ -1747,8 +1759,8 @@ def create_app(data_dir: Path) -> FastAPI:
         body = await request.json()
         investigation_id = body.get("investigation_id")
 
-        from .predictive import get_prediction, get_predictive_model
         from .evidence import compute_canonical_digest
+        from .predictive import get_prediction, get_predictive_model
 
         pred = get_prediction(store, tenant, prediction_id)
         if pred is None:
@@ -1837,7 +1849,7 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, _ = ctx(x_tenant, x_user)
         limit, offset = pagination
-        from .pilot import list_pilots, count_pilots
+        from .pilot import count_pilots, list_pilots
         total = count_pilots(store, tenant)
         items = list_pilots(store, tenant, limit=limit, offset=offset)
         response.headers["X-Total-Count"] = str(total)
@@ -1937,7 +1949,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/refresh")
     async def refresh_pilot_dataset_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
+        tenant, _user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot
         pilot = get_pilot(store, tenant, pilot_id)
@@ -2061,7 +2073,7 @@ def create_app(data_dir: Path) -> FastAPI:
     async def bootstrap_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
-        from .pilot import create_pilot, update_pilot_status, PilotStatus
+        from .pilot import PilotStatus, create_pilot, update_pilot_status
         from .predictive import create_predictive_target, register_predictive_model
 
         # 1. Create Pilot
@@ -2114,9 +2126,9 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/mapping")
     async def configure_pilot_mapping_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
+        tenant, _user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
-        from .pilot import get_pilot, update_pilot_config, analyze_workflow_mapping
+        from .pilot import analyze_workflow_mapping, get_pilot, update_pilot_config
         pilot = get_pilot(store, tenant, pilot_id)
         if pilot is None:
             raise HTTPException(404, "not found")
@@ -2140,7 +2152,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.post("/v1/pilots/{pilot_id}/sla")
     async def configure_pilot_sla_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
+        tenant, _user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
         from .pilot import get_pilot, update_pilot_config
         pilot = get_pilot(store, tenant, pilot_id)
@@ -2163,8 +2175,8 @@ def create_app(data_dir: Path) -> FastAPI:
     async def create_pilot_monitoring_rule_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user, permission="manage_pilot")
         body = await request.json()
-        from .pilot import get_pilot, update_pilot_config
         from .monitoring import AlertLifecycle
+        from .pilot import get_pilot, update_pilot_config
         pilot = get_pilot(store, tenant, pilot_id)
         if pilot is None:
             raise HTTPException(404, "not found")

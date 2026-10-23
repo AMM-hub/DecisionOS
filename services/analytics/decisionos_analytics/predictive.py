@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any
 
 from .store import Store, new_id, now_iso
 

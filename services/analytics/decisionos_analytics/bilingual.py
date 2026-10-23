@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 import unicodedata
 
-
 _ARABIC_NORMALIZE = str.maketrans({
     "أ": "ا", "إ": "ا", "آ": "ا",  # hamza variants → alif
     "ة": "ه",  # tāʼ marbūṭa → hāʼ
@@ -122,10 +121,7 @@ def search_match(query: str, aliases: dict) -> bool:
 
     # Check token overlap
     combined_tokens = set(aliases.get("combined", []))
-    if q_tokens & combined_tokens:
-        return True
-
-    return False
+    return bool(q_tokens & combined_tokens)
 
 
 # ---------------------------------------------------------------------------

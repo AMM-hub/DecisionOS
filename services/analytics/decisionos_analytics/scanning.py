@@ -36,7 +36,6 @@ def sniff_format(filename: str, data: bytes) -> str | None:
 
 
 def scan(filename: str, data: bytes) -> ScanResult:
-    reasons: list[str] = []
     if len(data) > LIMITS.max_upload_bytes:
         return ScanResult("rejected", [f"size {len(data)} exceeds limit {LIMITS.max_upload_bytes}"])
 

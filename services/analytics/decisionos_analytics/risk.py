@@ -7,7 +7,7 @@ already-overdue case state handling, leakage feature rejection, and configurable
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -56,7 +56,7 @@ def parse_datetime(dt_str: str) -> datetime:
     dt_str = dt_str.replace("Z", "+00:00")
     dt = datetime.fromisoformat(dt_str)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -388,15 +388,15 @@ def calculate_classification_metrics(
     if 0 < pos_events < n_samples:
         try:
             roc_auc = float(roc_auc_score(y_true, y_prob))
-        except Exception:
+        except ValueError:
             roc_auc = None
         try:
             pr_auc = float(average_precision_score(y_true, y_prob))
-        except Exception:
+        except ValueError:
             pr_auc = None
         try:
             log_l = float(log_loss(y_true, np.clip(y_prob, 1e-7, 1 - 1e-7)))
-        except Exception:
+        except ValueError:
             log_l = None
 
     y_pred = (y_prob >= threshold).astype(int)

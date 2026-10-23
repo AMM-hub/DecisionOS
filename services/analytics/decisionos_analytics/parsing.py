@@ -13,7 +13,7 @@ import csv as _csv
 import io
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import polars as pl
 
@@ -123,7 +123,7 @@ def parse_csv(data: bytes, max_rows: int | None = None, deadline_s: float | None
         inferred = {pl.Utf8: "string", pl.Int64: "integer", pl.Float64: "float"}[dtype]
         try:
             s = pl.Series(name, [int(v) if v != "" else None for v in vals] if dtype == pl.Int64 else ([float(v) if v != "" else None for v in vals] if dtype == pl.Float64 else vals), dtype=dtype)
-        except Exception as exc:  # coercion failure -> keep as string, record
+        except Exception as exc:  # noqa: BLE001 - coercion failure keeps the column as text and records the issue
             issues.append(f"column '{name}' kept as text: {exc}")
             s = pl.Series(name, vals, dtype=pl.Utf8)
             inferred = "string"

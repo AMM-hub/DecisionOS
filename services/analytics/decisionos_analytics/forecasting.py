@@ -18,7 +18,7 @@ travel through the API without pickles.
 
 import json
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -385,7 +385,7 @@ def rolling_origin_evaluate(
                         "q975": pinball_loss(actual_y, hi95, 0.975),
                     },
                 })
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - any candidate failure is recorded as a fold error, not fatal
                 model_fold_results[name].append({
                     "fold": fold_idx,
                     "train_size": train_end,
@@ -401,7 +401,7 @@ def rolling_origin_evaluate(
         if folds:
             baseline_maes[b_name] = float(np.mean([f["mae"] for f in folds]))
 
-    ref_baseline_name = "Naive" if "Naive" in baseline_maes else (list(baseline_maes.keys())[0] if baseline_maes else None)
+    ref_baseline_name = "Naive" if "Naive" in baseline_maes else (next(iter(baseline_maes.keys())) if baseline_maes else None)
     ref_baseline_mae = baseline_maes.get(ref_baseline_name) if ref_baseline_name else None
 
     for name in models:
@@ -478,7 +478,7 @@ def evaluate(
     if use_rolling_origin:
         return rolling_origin_evaluate(
             data=data,
-            horizon=max(1, int(round(data.height * test_size))),
+            horizon=max(1, round(data.height * test_size)),
             n_folds=n_folds,
             min_train_size=MIN_PERIODS,
             frequency=frequency,
@@ -496,7 +496,7 @@ def evaluate(
             missing=[f"{MIN_PERIODS - n} more periods of history"],
             actions=["upload more history or aggregate to a coarser frequency"],
         )
-    holdout = max(3, min(int(round(n * test_size)), n - MIN_PERIODS))
+    holdout = max(3, min(round(n * test_size), n - MIN_PERIODS))
     train, test = df.head(n - holdout), df.tail(holdout)
     m = _effective_season(season_length, frequency, train.height)
 
@@ -506,7 +506,7 @@ def evaluate(
     for name in models:
         try:
             pred = _fit_predict(train, name, m, frequency, holdout)
-        except Exception:  # a candidate failing to converge is reported, not fatal
+        except Exception:  # noqa: BLE001 - a candidate failing to converge is reported, not fatal
             comparisons.append({"model_name": name, "mae": None, "mape": None, "mase": None, "rmse": None, "relative_mae": None, "error": "fit_failed"})
             continue
         res = _metrics(test["y"].to_numpy(), pred, train["y"].to_numpy(), m)
@@ -514,7 +514,7 @@ def evaluate(
             baseline_maes[name] = res["mae"]
         comparisons.append({"model_name": name, "error": None, **res})
 
-    ref_baseline = baseline_maes.get("Naive") or (list(baseline_maes.values())[0] if baseline_maes else None)
+    ref_baseline = baseline_maes.get("Naive") or (next(iter(baseline_maes.values())) if baseline_maes else None)
     for c in comparisons:
         if c.get("mae") is not None and ref_baseline and ref_baseline > 0:
             c["relative_mae"] = _r(c["mae"] / ref_baseline)
@@ -621,9 +621,8 @@ def capture_forecast_evidence(
 def _baseline_winner(comparisons: list[dict]) -> str | None:
     best = None
     for c in comparisons:
-        if c["model_name"] in BASELINE_MODELS and c["mase"] is not None:
-            if best is None or c["mase"] < best["mase"]:
-                best = c
+        if c["model_name"] in BASELINE_MODELS and c["mase"] is not None and (best is None or c["mase"] < best["mase"]):
+            best = c
     return best["model_name"] if best else None
 
 
@@ -672,7 +671,7 @@ def train_model(
         "assumptions": ASSUMPTIONS,
         "limitations": LIMITATIONS,
         "series": [[d.isoformat(), y] for d, y in zip(df["ds"].to_list(), df["y"].to_list())],
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     return spec
 

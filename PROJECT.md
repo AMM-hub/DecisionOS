@@ -94,3 +94,25 @@ DecisionOS is a decision intelligence platform comprising:
 - Variable: `DECISIONOS_DATA_DIR`
 - Sandbox Path: `c:\Users\AMD\Desktop\DecisionOS\var\sandbox_pilot01`
 - Baseline DB: `c:\Users\AMD\Desktop\DecisionOS\var\worker\control.sqlite3` (baseline `9492676`, preserved intact)
+
+## Runtime Security
+- **Strict auth is opt-in:** `DECISIONOS_AUTH_STRICT=1` requires `DECISIONOS_JWT_SECRET` to be set and at least 32 bytes. If it is missing or too short, the service **refuses to boot** with `RuntimeError: DECISIONOS_AUTH_STRICT=1 requires DECISIONOS_JWT_SECRET to be configured with at least 32 bytes.`
+- **JWT-only identity in strict mode:** `Authorization: Bearer <jwt>` is the only accepted identity source. `X-Tenant` / `X-User` demo headers are ignored, not merely unverified, and forged/expired tokens return `401`.
+- **Token minting is disabled by default:** `POST /v1/auth/token` returns `404` unless `DECISIONOS_ALLOW_TOKEN_MINT=1`. Keep it off in production; mint tokens out-of-band with the shared secret.
+- **RBAC is enforced per route:** mutating routes are mapped to permissions (`write`, `approve`, `transition`, `manage_pilot`, ...) and a role lacking one receives `403` with `code: "forbidden"`.
+- **Environment:** `DECISIONOS_AUTH_STRICT`, `DECISIONOS_JWT_SECRET`, `DECISIONOS_ALLOW_TOKEN_MINT`, `DECISIONOS_DATA_DIR` (see `.env.example`).
+
+## List Endpoints
+Every `GET` list endpoint accepts bounded pagination:
+- `limit` — integer, `1..500`, default `50`.
+- `offset` — integer, `>= 0`, default `0`.
+- Out-of-range values are rejected with `422` and `code: "invalid_pagination"`.
+
+Responses keep their existing shape (bare array or object with the items key) and add an `X-Total-Count` response header with the unpaginated total for the tenant.
+
+Substring filters (`q`, case-insensitive) are available on:
+- `/v1/decisions` — decision title
+- `/v1/investigations` — investigation title
+- `/v1/datasets` — dataset name
+
+Covered list paths include uploads, datasets, metric definitions, outbox, scenarios/templates, decisions and decision evidence, monitoring health/rules/conditions/episodes, investigations and claims, predictive targets/models, and pilots.

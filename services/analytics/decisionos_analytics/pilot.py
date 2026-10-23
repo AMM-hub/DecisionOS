@@ -6,14 +6,14 @@ and Support Operations semantic pack definitions.
 
 from __future__ import annotations
 
-import io
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any
 
 import polars as pl
+
 from .store import Store, new_id, now_iso
 
 
@@ -303,7 +303,7 @@ def validate_pilot_data_readiness(
     invalid_ts_count = 0
     out_of_order_cases = 0
     completion_before_creation_cases = 0
-    now_dt = datetime.now(timezone.utc)
+    now_dt = datetime.now(UTC)
 
     if actual_case_col and actual_ts_col and actual_status_col:
         try:
@@ -320,7 +320,7 @@ def validate_pilot_data_readiness(
                     try:
                         dt_val = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
                         if dt_val.tzinfo is None:
-                            dt_val = dt_val.replace(tzinfo=timezone.utc)
+                            dt_val = dt_val.replace(tzinfo=UTC)
                         ts_list.append(dt_val)
                         st_list.append(st_val)
                         if (dt_val - now_dt).total_seconds() > 86400 * 365:
@@ -341,7 +341,7 @@ def validate_pilot_data_readiness(
                     comp_idx = st_list.index("completed")
                     if ts_list[comp_idx] < ts_list[c_idx]:
                         completion_before_creation_cases += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - detailed validation is best-effort; caveat is reported
             warnings.append(f"Detailed case validation caveat: {e}")
 
     if invalid_ts_count > 0:
@@ -400,13 +400,9 @@ def analyze_workflow_mapping(
 ) -> dict[str, Any]:
     """Analyze workflow mapping against dataset and return summary stats & limitations."""
     case_col = mapping.get("case_id", "ticket_id")
-    event_col = mapping.get("activity", "event")
-    ts_col = mapping.get("timestamp", "timestamp")
     status_col = mapping.get("completion_state", "status")
 
     actual_case = case_col if case_col in df.columns else ("case_id" if "case_id" in df.columns else None)
-    actual_event = event_col if event_col in df.columns else ("event" if "event" in df.columns else None)
-    actual_ts = ts_col if ts_col in df.columns else ("timestamp" if "timestamp" in df.columns else None)
     actual_status = status_col if status_col in df.columns else ("status" if "status" in df.columns else None)
 
     case_count = int(df[actual_case].n_unique()) if actual_case else 0

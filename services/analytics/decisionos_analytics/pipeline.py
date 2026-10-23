@@ -8,9 +8,7 @@ event. Failed attempts are never visible to query execution.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
-
-import polars as pl
+from datetime import UTC, datetime, timedelta
 
 from .grain import grain_candidates
 from .objectstore import LocalObjectStore
@@ -87,7 +85,7 @@ def process_upload(store: Store, objects: LocalObjectStore, tenant_id: str, uplo
         "checkpoint": {"source": f"upload:{upload_id}", "sha256": row["sha256"]},
     }
 
-    lease = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+    lease = (datetime.now(UTC) + timedelta(seconds=lease_seconds)).isoformat()
     store.conn.execute(
         "INSERT INTO dataset_revision(tenant_id, dataset_id, revision, state, manifest, row_count, rejected_row_count, lease_owner, lease_expires_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (tenant_id, dataset_id, revision, "validating", json.dumps(manifest), outcome.row_count, len(outcome.rejected_rows), lease_owner, lease, now_iso()),
@@ -141,7 +139,7 @@ def publish_revision(store: Store, tenant_id: str, dataset_id: str, revision: in
 
 def sweep_expired_leases(store: Store, now: datetime | None = None) -> int:
     """Independent lease sweeper: workers can die before finally (§8.5)."""
-    now = (now or datetime.now(timezone.utc)).isoformat()
+    now = (now or datetime.now(UTC)).isoformat()
     with store.conn:
         cur = store.conn.execute(
             "UPDATE dataset_revision SET state='failed', lease_owner=NULL WHERE state='validating' AND lease_expires_at < ?",
