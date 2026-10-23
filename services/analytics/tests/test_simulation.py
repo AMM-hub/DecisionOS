@@ -174,7 +174,7 @@ def test_simulation_run_endpoint_requires_auth(client):
 def test_simulation_run_endpoint_rejects_invalid_config(client, alpha_headers):
     r = client.post("/v1/simulations/run", json={"num_servers": 0}, headers=alpha_headers)
     assert r.status_code == 422
-    assert r.json()["detail"].startswith('{"code": "invalid_simulation_config"')
+    assert r.json()["code"] == "invalid_simulation_config"
 
 
 def test_simulation_run_endpoint_tenant_isolation(client, alpha_headers, beta_headers):

@@ -48,10 +48,34 @@ export function useApi() {
       let detail: unknown
       try {
         const parsed = JSON.parse(text)
-        detail = parsed.detail ?? parsed
-        code = typeof detail === 'object' && detail !== null ? (detail as { code?: string }).code : undefined
+        // New flat contract: {code, detail, status} — R1 compliant
+        if (typeof parsed.code === 'string' && parsed.code) {
+          code = parsed.code
+          detail = parsed.detail ?? parsed
+        } else if (parsed.detail !== undefined) {
+          // Legacy back-compat: FastAPI's double-encoded envelope
+          // {"detail": "{\"code\":\"...\",\"detail\":\"...\"}"}
+          const rawDetail = parsed.detail
+          if (typeof rawDetail === 'string') {
+            try {
+              const inner = JSON.parse(rawDetail)
+              code = typeof inner.code === 'string' ? inner.code : undefined
+              detail = inner
+            } catch {
+              // detail is a plain string (e.g. "not found", "Bearer token required")
+              code = undefined
+              detail = rawDetail
+            }
+          } else {
+            code = typeof rawDetail?.code === 'string' ? rawDetail.code : undefined
+            detail = rawDetail
+          }
+        } else {
+          detail = parsed
+        }
       } catch {
         code = undefined
+        detail = text
       }
       throw new ApiError(res.status, friendlyMessage(res.status, code, text), code, detail)
     }

@@ -55,6 +55,30 @@ DEMO_USERS = {  # user -> (tenant, role)
 APPROVER_ROLES = {"ops_manager", "semantic_modeler"}
 
 
+
+import logging as _logging
+
+_api_logger = _logging.getLogger(__name__)
+
+
+class APIException(HTTPException):
+    def __init__(self, status_code: int, code: str, detail: str, extra: dict | None = None):
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+        self.extra = extra or {}
+
+
+def api_error(status: int, code: str, detail: str, extra: dict | None = None) -> JSONResponse:
+    """Return a flat, machine-readable error body.
+
+    Body: {"code": code, "detail": detail, "status": status[, ...extra]}
+    Guarantees: detail is always a plain string, never a JSON-encoded object.
+    """
+    body: dict = {"code": code, "detail": detail, "status": status}
+    if extra:
+        body.update(extra)
+    return JSONResponse(status_code=status, content=body)
+
 def create_app(data_dir: Path) -> FastAPI:
     data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(data_dir / "control.sqlite3")
@@ -80,6 +104,10 @@ def create_app(data_dir: Path) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(APIException)
+    async def api_exception_handler(request: Request, exc: APIException):
+        return api_error(exc.status_code, exc.code, exc.detail, exc.extra)
 
     @app.exception_handler(json.JSONDecodeError)
     async def json_decode_error_handler(request: Request, exc: json.JSONDecodeError):
@@ -169,17 +197,28 @@ def create_app(data_dir: Path) -> FastAPI:
     ):
         tenant, user = ctx(x_tenant, x_user)
         body = await request.json()
+        if "filename" not in body:
+            return api_error(422, "missing_field", "Field 'filename' is required.")
+        if not isinstance(body["filename"], str):
+            return api_error(422, "invalid_value", "Field 'filename' must be a string.")
         upload_id = new_id()
-        qkey = f"{tenant}/{body.get('workspace_id','ws-support-ops')}/{upload_id}/{Path(body['filename']).name}"
         import sqlite3
         try:
+            qkey = f"{tenant}/{body.get('workspace_id','ws-support-ops')}/{upload_id}/{Path(body['filename']).name}"
             store.conn.execute(
                 "INSERT INTO upload(tenant_id,id,workspace_id,created_by,filename,quarantine_key,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
                 (tenant, upload_id, body.get("workspace_id", "ws-support-ops"), user, body["filename"], qkey, "initiated", now_iso()),
             )
             store.conn.commit()
-        except (sqlite3.IntegrityError, KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_upload_request", "detail": str(e)}))
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("upload missing field: %s", e)
+            return api_error(422, "missing_field", f"A required field is missing from the upload request: {e}")
+        except ValueError as e:
+            _api_logger.exception("upload invalid value: %s", e)
+            return api_error(422, "invalid_value", str(e))
+        except sqlite3.IntegrityError as e:
+            _api_logger.exception("upload integrity error: %s", e)
+            return api_error(422, "invalid_upload_request", "Upload request violates a database constraint (e.g. unknown workspace).")
         return {
             "upload_id": upload_id,
             "method": "PUT",
@@ -228,7 +267,7 @@ def create_app(data_dir: Path) -> FastAPI:
         if row is None:
             raise HTTPException(404, "not found")
         if row["parse_preview"] is None:
-            raise HTTPException(409, json.dumps({"code": "preview_not_ready"}))
+            return api_error(409, "preview_not_ready", "Dataset preview is not yet available. Finalize the upload first.")
         return json.loads(row["parse_preview"])
 
     @app.get("/v1/uploads/{upload_id}/grain-candidates")
@@ -274,7 +313,7 @@ def create_app(data_dir: Path) -> FastAPI:
         ds = store.conn.execute("SELECT published_revision FROM dataset WHERE tenant_id=? AND id=?", (tenant, dataset_id)).fetchone()
         rev_no = ds["published_revision"] if ds else None
         if rev_no is None:
-            raise HTTPException(409, json.dumps({"code": "no_published_revision"}))
+            return api_error(409, "no_published_revision", "No published revision exists for this dataset.")
         rev = store.conn.execute("SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
                                  (tenant, dataset_id, rev_no)).fetchone()
         manifest = json.loads(rev["manifest"])
@@ -302,11 +341,15 @@ def create_app(data_dir: Path) -> FastAPI:
     async def confirm_grain(dataset_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         body = await request.json()
+        if "key_columns" not in body:
+            return api_error(422, "missing_field", "Field 'key_columns' is required.")
         key = body["key_columns"]
+        if not isinstance(key, list):
+            return api_error(422, "invalid_value", "Field 'key_columns' must be a list of column names.")
         candidates = _grain_for_dataset(store, objects, tenant, dataset_id)
         match = next((c for c in candidates if c["key_columns"] == key), None)
         if match is None or not match["unique_over_full_data"]:
-            raise HTTPException(422, json.dumps({"code": "grain_not_proven", "evidence": match}))
+            return api_error(422, "grain_not_proven", "The proposed grain key does not uniquely identify rows over the full dataset.", extra={"evidence": match})
         with store.conn:
             store.conn.execute("UPDATE dataset SET grain_confirmed_at=?, grain_key=? WHERE tenant_id=? AND id=?",
                                (now_iso(), json.dumps(key), tenant, dataset_id))
@@ -321,9 +364,10 @@ def create_app(data_dir: Path) -> FastAPI:
         except LookupError:
             raise HTTPException(404, "not found")
         except PermissionError:
-            raise HTTPException(422, json.dumps({"code": "grain_unconfirmed"}))
+            return api_error(422, "grain_unconfirmed", "Publishing is blocked until the business grain has been confirmed.")
         except RuntimeError as e:
-            raise HTTPException(409, json.dumps({"code": str(e)}))
+            _api_logger.exception("publish conflict: %s", e)
+            return api_error(409, "concurrent_publish_conflict", "A concurrent publish moved the revision pointer. Refresh and retry.")
 
     # ---- definitions & metrics -----------------------------------------
     @app.get("/v1/metrics/definitions")
@@ -373,7 +417,7 @@ def create_app(data_dir: Path) -> FastAPI:
     async def approve(metric_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         if role_of(user) not in APPROVER_ROLES:
-            raise HTTPException(403, json.dumps({"code": "approval_not_allowed"}))
+            return api_error(403, "approval_not_allowed", "This user role is not permitted to approve metric definitions.")
         body = await request.json()
         version = int(body["version"])
         row = store.conn.execute("SELECT * FROM definition_version WHERE tenant_id=? AND definition_id=? AND version=?",
@@ -381,7 +425,7 @@ def create_app(data_dir: Path) -> FastAPI:
         if row is None:
             raise HTTPException(404, "not found")
         if row["created_by"] == user:
-            raise HTTPException(403, json.dumps({"code": "self_approval_not_allowed"}))  # QA-018 family
+            return api_error(403, "self_approval_not_allowed", "Self-approval is not permitted. Use a different acting user.")  # QA-018 family
         content = MetricDefinitionContent.model_validate(json.loads(row["content"]))
         with store.conn:
             store.conn.execute("UPDATE definition_publication SET effective_to=? WHERE tenant_id=? AND definition_id=? AND effective_to IS NULL",
@@ -397,14 +441,14 @@ def create_app(data_dir: Path) -> FastAPI:
     async def withdraw(metric_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         if role_of(user) not in APPROVER_ROLES:
-            raise HTTPException(403, json.dumps({"code": "withdraw_not_allowed"}))
+            return api_error(403, "withdraw_not_allowed", "This user role is not permitted to withdraw metric definitions.")
         body = await request.json()
         pub = store.conn.execute(
             "SELECT * FROM definition_publication WHERE tenant_id=? AND definition_id=? AND effective_to IS NULL",
             (tenant, metric_id),
         ).fetchone()
         if pub is None:
-            raise HTTPException(409, json.dumps({"code": "no_active_publication"}))
+            return api_error(409, "no_active_publication", "No active publication exists for this metric definition.")
         with store.conn:
             store.conn.execute(
                 "UPDATE definition_publication SET effective_to=? WHERE tenant_id=? AND definition_id=? AND effective_to IS NULL",
@@ -458,7 +502,7 @@ def create_app(data_dir: Path) -> FastAPI:
         a (ds, y) series. Raises HTTPException with an insufficient_data body
         when the data cannot support the request (§16 workflow 1)."""
         def refuse(code: str, missing: list[str], actions: list[str]):
-            raise HTTPException(422, json.dumps({"code": code, "reason": "insufficient_data", "missing_requirements": missing, "next_actions": actions}))
+            raise HTTPException(422, json.dumps({"code": code, "reason": "insufficient_data", "missing_requirements": missing, "next_actions": actions}))  # internal signal to _refused_from_http, not client-facing
 
         ds = store.conn.execute("SELECT * FROM dataset WHERE tenant_id=? AND id=?", (tenant, dataset_id)).fetchone()
         if ds is None or ds["published_revision"] is None:
@@ -609,8 +653,7 @@ def create_app(data_dir: Path) -> FastAPI:
             (tenant, ds["id"]),
         ).fetchone()
         if rev is None:
-            raise HTTPException(409, json.dumps({"code": "no_revision", "reason": "insufficient_data",
-                                                 "missing_requirements": ["ingested dataset revision"], "next_actions": ["upload"]}))
+            raise APIException(409, "no_revision", "No ingested dataset revision exists. Upload data first.", extra={"reason": "insufficient_data", "missing_requirements": ["ingested dataset revision"], "next_actions": ["upload"]})
         manifest = json.loads(rev["manifest"])
         frame = pl.read_parquet(io.BytesIO(objects.get_revision_object(manifest["objects"][0]["key"])))
         try:
@@ -622,8 +665,8 @@ def create_app(data_dir: Path) -> FastAPI:
                 attribute_cols=body.get("attributes"),
             )
         except WorkflowError as e:
-            raise HTTPException(422, json.dumps({"code": "workflow_input_invalid", "reason": "insufficient_data",
-                                                 "detail": str(e), "next_actions": ["check column mapping"]}))
+            _api_logger.exception("workflow event log mapping error: %s", e)
+            raise APIException(422, "workflow_input_invalid", str(e), extra={"reason": "insufficient_data", "next_actions": ["check column mapping"]})
         return log, rev["revision"]
 
     @app.post("/v1/workflow/bottlenecks")
@@ -665,8 +708,8 @@ def create_app(data_dir: Path) -> FastAPI:
         try:
             result = conformance_checking(log, body.get("expected_rules", []))
         except WorkflowError as e:
-            raise HTTPException(422, json.dumps({"code": "workflow_input_invalid", "reason": "insufficient_data",
-                                                 "detail": str(e), "next_actions": ["provide expected_rules"]}))
+            _api_logger.exception("workflow conformance error: %s", e)
+            return api_error(422, "workflow_input_invalid", "Conformance checking failed due to invalid input. Provide valid expected_rules.", extra={"reason": "insufficient_data", "next_actions": ["provide expected_rules"]})
         evidence_ref = store.save_evidence(tenant, "workflow_conformance", {"dataset_id": body["dataset_id"], "revision": rev_no, "rules": body.get("expected_rules"), "result": result})
         store.audit(tenant, user, "workflow.conformance", body["dataset_id"], "answered", {"evidence_ref": evidence_ref})
         return {"status": "answered", **result, "revision": rev_no, "evidence_ref": evidence_ref}
@@ -742,7 +785,8 @@ def create_app(data_dir: Path) -> FastAPI:
                 backlog_penalty={tuple(k): v for k, v in body.get("backlog_penalty", {}).items()},
             )
         except (KeyError, TypeError, ValueError, AttributeError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_inputs", "detail": str(e)}))
+            _api_logger.exception("scenario solve invalid inputs: %s", e)
+            return api_error(422, "invalid_inputs", "Scenario solver inputs are invalid or missing required fields.")
 
         import logging
         import pulp as plp
@@ -757,7 +801,8 @@ def create_app(data_dir: Path) -> FastAPI:
             )
         except (plp.PulpError, ValueError) as e:
             # Domain solver input/configuration error
-            raise HTTPException(422, json.dumps({"code": "solver_error", "detail": str(e)}))
+            _api_logger.exception("scenario solver error: %s", e)
+            return api_error(422, "solver_error", "The optimization solver encountered an error with the given inputs.")
         except Exception as e:
             # Unexpected internal solver/system failure -> 500 with safe error body
             logging.getLogger(__name__).exception("Unexpected solver internal error: %s", e)
@@ -798,7 +843,8 @@ def create_app(data_dir: Path) -> FastAPI:
             ]
             rec = _create(conn, x_tenant, body["title"], brief, x_user, counterevidence=ce)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_decision", "detail": str(e)}))
+            _api_logger.exception("invalid decision payload: %s", e)
+            return api_error(422, "invalid_decision", "The decision request is missing required fields or contains invalid values.")
         store.audit(x_tenant, x_user, "decision.create", rec.id, "created", {"title": body["title"]})
         return _decision_to_dict(rec)
 
@@ -829,13 +875,17 @@ def create_app(data_dir: Path) -> FastAPI:
         try:
             status_val = body.get("status", "")
             rec = transition_status(store.conn, x_tenant, decision_id, status_val, x_user, body.get("reason", ""))
-        except LookupError as e:
-            raise HTTPException(404, str(e))
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("decision transition missing field: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
             err_msg = str(e)
             if "Invalid status transition" in err_msg:
-                raise HTTPException(409, json.dumps({"code": "invalid_transition", "detail": err_msg}))
-            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": err_msg}))
+                return api_error(409, "invalid_transition", err_msg)
+            return api_error(422, "invalid_status", err_msg)
+        except LookupError as e:
+            _api_logger.exception("decision not found: %s", e)
+            raise HTTPException(404, "not found")
         store.audit(x_tenant, x_user, "decision.transition", decision_id, "success", {"to_status": body["status"]})
         return _decision_to_dict(rec)
 
@@ -846,6 +896,8 @@ def create_app(data_dir: Path) -> FastAPI:
         body = await request.json()
         from .register import OutcomeRecord, Verdict, record_outcome
         try:
+            if "review_verdict" not in body:
+                return api_error(422, "missing_field", "Field 'review_verdict' is required.")
             outcome = OutcomeRecord(
                 observed_results=body.get("observed_results", {}),
                 pinned_definition_version=body.get("pinned_definition_version"),
@@ -859,10 +911,15 @@ def create_app(data_dir: Path) -> FastAPI:
                 verdict_evidence=body.get("verdict_evidence", ""),
             )
             rec = record_outcome(store.conn, x_tenant, decision_id, outcome, x_user, body.get("reason", "Evaluated"))
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("invalid outcome payload missing field: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
+        except ValueError as e:
+            _api_logger.exception("invalid outcome payload: %s", e)
+            return api_error(422, "invalid_outcome", str(e))
         except LookupError as e:
-            raise HTTPException(404, str(e))
-        except (KeyError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_outcome", "detail": str(e)}))
+            _api_logger.exception("outcome decision not found: %s", e)
+            raise HTTPException(404, "not found")
         store.audit(x_tenant, x_user, "decision.outcome", decision_id, "recorded", {"verdict": body["review_verdict"]})
         return _decision_to_dict(rec)
 
@@ -872,12 +929,19 @@ def create_app(data_dir: Path) -> FastAPI:
         body = await request.json()
         from .register import BindingRole, bind_evidence as _bind
         try:
+            if "evidence_id" not in body:
+                return api_error(422, "missing_field", "Field 'evidence_id' is required.")
             role = BindingRole(body.get("binding_role", "primary_support"))
             res = _bind(store.conn, x_tenant, decision_id, body["evidence_id"], role, x_user)
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("invalid evidence binding missing field: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
+        except ValueError as e:
+            _api_logger.exception("invalid evidence binding: %s", e)
+            return api_error(422, "invalid_binding", str(e))
         except LookupError as e:
-            raise HTTPException(404, str(e))
-        except (KeyError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_binding", "detail": str(e)}))
+            _api_logger.exception("bind evidence not found: %s", e)
+            raise HTTPException(404, "not found")
         store.audit(x_tenant, x_user, "decision.bind_evidence", decision_id, "bound", {"evidence_id": body["evidence_id"], "role": role.value})
         return res
 
@@ -944,15 +1008,20 @@ def create_app(data_dir: Path) -> FastAPI:
     async def simulation_run(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         body = await request.json()
+        if not body or "num_servers" not in body:
+            return api_error(422, "invalid_simulation_config", "Field 'num_servers' is required.")
         from .simulation import SimulationConfig, SimulationError, run_simulation
         try:
             config = SimulationConfig.from_dict(body)
+            config.validate()
         except (KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_simulation_config", "detail": str(e)}))
+            _api_logger.exception("invalid simulation config: %s", e)
+            return api_error(422, "invalid_simulation_config", str(e))
         try:
             result = run_simulation(config)
         except SimulationError as e:
-            raise HTTPException(422, json.dumps({"code": "simulation_failed", "detail": str(e)}))
+            _api_logger.exception("simulation failed: %s", e)
+            return api_error(422, "simulation_failed", str(e))
         payload = result.to_dict()
         evidence_ref = store.save_evidence(tenant, "simulation_run", {
             "config": config.to_dict(),
@@ -984,7 +1053,8 @@ def create_app(data_dir: Path) -> FastAPI:
         try:
             rule = AlertLifecycle.create_rule(tenant, body, user, store)
         except (KeyError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_rule", "detail": str(e)}))
+            _api_logger.exception("invalid alert rule: %s", e)
+            return api_error(422, "invalid_rule", "The alert rule definition is invalid or missing required fields.")
         return {"status": "created", "rule": rule}
 
     @app.get("/v1/monitoring/rules")
@@ -1003,10 +1073,15 @@ def create_app(data_dir: Path) -> FastAPI:
         from .monitoring import AlertLifecycle
         try:
             rule = AlertLifecycle.update_rule(tenant, rule_id, body, user, store)
-        except (LookupError) as e:
-            raise HTTPException(404, str(e))
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing field in alert rule update: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_update", "detail": str(e)}))
+            _api_logger.exception("invalid alert rule update: %s", e)
+            return api_error(422, "invalid_update", str(e))
+        except LookupError as e:
+            _api_logger.exception("alert rule not found: %s", e)
+            raise HTTPException(404, "not found")
         return {"status": "updated", "rule": rule}
 
     @app.post("/v1/monitoring/evaluate")
@@ -1078,11 +1153,18 @@ def create_app(data_dir: Path) -> FastAPI:
         body = await request.json()
         from .monitoring import AlertLifecycle
         try:
+            if "status" not in body:
+                return api_error(422, "missing_field", "Field 'status' is required.")
             ep = AlertLifecycle.transition_episode(tenant, episode_id, body["status"], user, store)
-        except (LookupError) as e:
-            raise HTTPException(404, str(e))
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing field in episode transition: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+            _api_logger.exception("invalid episode status: %s", e)
+            return api_error(422, "invalid_status", str(e))
+        except LookupError as e:
+            _api_logger.exception("episode not found: %s", e)
+            raise HTTPException(404, "not found")
         return {"status": "updated", "episode": ep}
 
     # ---- bilingual search (M6, spec §27) ------------
@@ -1163,9 +1245,10 @@ def create_app(data_dir: Path) -> FastAPI:
         except EvidenceError as e:
             if e.code == "investigation_not_found":
                 raise HTTPException(404, "not found")
-            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+            return api_error(422, e.code, str(e.detail) if e.detail else "Evidence request validation failed.")
         except (KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_evidence_request", "detail": str(e)}))
+            _api_logger.exception("invalid evidence request: %s", e)
+            return api_error(422, "invalid_evidence_request", "The evidence capture request is missing required fields or has invalid values.")
 
     @app.get("/v1/evidence/{evidence_id}")
     async def get_evidence_api(evidence_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1194,9 +1277,10 @@ def create_app(data_dir: Path) -> FastAPI:
         except InvestigationError as e:
             if e.code == "source_not_found":
                 raise HTTPException(404, "not found")
-            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+            return api_error(422, e.code, str(e.detail) if e.detail else "Investigation request validation failed.")
         except (KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_investigation", "detail": str(e)}))
+            _api_logger.exception("invalid investigation request: %s", e)
+            return api_error(422, "invalid_investigation", "The investigation request is missing required fields or has invalid values.")
 
     @app.get("/v1/investigations")
     async def list_investigations_api(
@@ -1227,9 +1311,10 @@ def create_app(data_dir: Path) -> FastAPI:
         except InvestigationError as e:
             if e.code == "investigation_not_found":
                 raise HTTPException(404, "not found")
-            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+            return api_error(422, e.code, str(e.detail) if e.detail else "Investigation status update failed.")
         except (KeyError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_status", "detail": str(e)}))
+            _api_logger.exception("invalid investigation status: %s", e)
+            return api_error(422, "invalid_status", "The requested investigation status value is not valid.")
 
     @app.post("/v1/investigations/{investigation_id}/claims", status_code=201)
     async def add_claim_api(investigation_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1248,9 +1333,10 @@ def create_app(data_dir: Path) -> FastAPI:
         except InvestigationError as e:
             if e.code in ("investigation_not_found", "evidence_not_found"):
                 raise HTTPException(404, "not found")
-            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+            return api_error(422, e.code, str(e.detail) if e.detail else "Claim validation failed.")
         except (KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_claim", "detail": str(e)}))
+            _api_logger.exception("invalid claim: %s", e)
+            return api_error(422, "invalid_claim", "The claim request is missing required fields or has invalid values.")
 
     @app.get("/v1/investigations/{investigation_id}/claims")
     async def list_claims_api(investigation_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1273,7 +1359,7 @@ def create_app(data_dir: Path) -> FastAPI:
         except InvestigationError as e:
             if e.code == "episode_not_found":
                 raise HTTPException(404, "not found")
-            raise HTTPException(422, json.dumps({"code": e.code, "detail": e.detail}))
+            return api_error(422, e.code, str(e.detail) if e.detail else "Episode investigation request failed.")
 
     # -----------------------------------------------------------------------
     # Predictive Risk & Forecasting API (WP-04)
@@ -1288,6 +1374,10 @@ def create_app(data_dir: Path) -> FastAPI:
     async def create_predictive_target_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         body = await request.json()
+        if "name" not in body:
+            return api_error(422, "missing_field", "Field 'name' is required.")
+        if "outcome_definition" not in body:
+            return api_error(422, "missing_field", "Field 'outcome_definition' is required.")
         from .predictive import create_predictive_target
         try:
             return create_predictive_target(
@@ -1301,8 +1391,12 @@ def create_app(data_dir: Path) -> FastAPI:
                 user_id=user,
                 time_basis=body.get("time_basis", "calendar_utc"),
             )
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing required field in predictive target: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_target_spec", "detail": str(e)}))
+            _api_logger.exception("invalid predictive target spec: %s", e)
+            return api_error(422, "invalid_target_spec", str(e))
 
     @app.get("/v1/predictive/models")
     async def list_predictive_models_api(x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1314,6 +1408,9 @@ def create_app(data_dir: Path) -> FastAPI:
     async def register_predictive_model_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         body = await request.json()
+        for req_field in ("target_id", "algorithm", "training_time_range", "evaluation_time_range"):
+            if req_field not in body:
+                return api_error(422, "missing_field", f"Field '{req_field}' is required.")
         from .predictive import register_predictive_model
         try:
             return register_predictive_model(
@@ -1331,8 +1428,12 @@ def create_app(data_dir: Path) -> FastAPI:
                 metrics=body.get("metrics", {}),
                 user_id=user,
             )
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing required field in model registration: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_model_registration", "detail": str(e)}))
+            _api_logger.exception("invalid model registration: %s", e)
+            return api_error(422, "invalid_model_registration", str(e))
 
     @app.post("/v1/predictive/models/{model_id}/transition")
     async def transition_model_status_api(model_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1342,10 +1443,15 @@ def create_app(data_dir: Path) -> FastAPI:
         from .predictive import transition_model_status
         try:
             return transition_model_status(store, tenant, model_id, target_status, user)
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing field in model transition: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            if "not found" in str(e).lower():
-                raise HTTPException(404, "not found")
-            raise HTTPException(422, json.dumps({"code": "invalid_transition", "detail": str(e)}))
+            _api_logger.exception("invalid model transition: %s", e)
+            return api_error(422, "invalid_transition", str(e))
+        except LookupError as e:
+            _api_logger.exception("model not found: %s", e)
+            raise HTTPException(404, "not found")
 
     @app.post("/v1/predictive/score")
     async def score_predictive_case_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1535,6 +1641,8 @@ def create_app(data_dir: Path) -> FastAPI:
     async def create_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         body = await request.json()
+        if "name" not in body:
+            return api_error(422, "missing_field", "Field 'name' is required.")
         from .pilot import create_pilot
         try:
             return create_pilot(
@@ -1550,8 +1658,12 @@ def create_app(data_dir: Path) -> FastAPI:
                 config=body.get("config", {}),
                 user_id=user,
             )
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing field in pilot: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_pilot_spec", "detail": str(e)}))
+            _api_logger.exception("invalid pilot spec: %s", e)
+            return api_error(422, "invalid_pilot_spec", str(e))
 
     @app.get("/v1/pilots/{pilot_id}")
     async def get_pilot_api(pilot_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1570,10 +1682,15 @@ def create_app(data_dir: Path) -> FastAPI:
         from .pilot import update_pilot_status
         try:
             return update_pilot_status(store, tenant, pilot_id, target_status, user)
-        except LookupError:
-            raise HTTPException(404, "not found")
+        except (KeyError, TypeError) as e:
+            _api_logger.exception("missing field in pilot status update: %s", e)
+            return api_error(422, "missing_field", f"Missing required field: {e}")
         except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_pilot_status_transition", "detail": str(e)}))
+            _api_logger.exception("invalid pilot status transition: %s", e)
+            return api_error(422, "invalid_pilot_status_transition", str(e))
+        except LookupError as e:
+            _api_logger.exception("pilot not found: %s", e)
+            raise HTTPException(404, "not found")
 
     @app.post("/v1/pilots/{pilot_id}/validate-data")
     async def validate_pilot_data_api(pilot_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -1623,7 +1740,7 @@ def create_app(data_dir: Path) -> FastAPI:
 
         dataset_id = body.get("dataset_id") or pilot.get("dataset_id")
         if not dataset_id:
-            raise HTTPException(422, json.dumps({"code": "missing_dataset_id"}))
+            return api_error(422, "refresh_failed", "A dataset_id is required to refresh pilot data.")
 
         # Get latest revision number
         max_rev_row = store.conn.execute(
@@ -1634,17 +1751,21 @@ def create_app(data_dir: Path) -> FastAPI:
 
         content_bytes = None
         if "csv_content" in body:
+            csv_str = body["csv_content"]
+            if not csv_str or not csv_str.strip():
+                return api_error(422, "refresh_failed", "The provided CSV content is empty.")
             try:
-                df = pl.read_csv(io.StringIO(body["csv_content"]))
+                df = pl.read_csv(io.StringIO(csv_str))
                 if df.height == 0:
-                    raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "CSV content is empty"}))
+                    return api_error(422, "refresh_failed", "The provided CSV content is empty.")
                 buf = io.BytesIO()
                 df.write_parquet(buf)
                 content_bytes = buf.getvalue()
             except Exception as e:
                 if isinstance(e, HTTPException):
                     raise e
-                raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": f"CSV parse error: {e}"}))
+                _api_logger.exception("CSV parse error during pilot refresh: %s", e)
+                return api_error(422, "refresh_failed", "The CSV content could not be parsed. Check the format and encoding.")
         elif body.get("use_previous_revision"):
             old_rev = store.conn.execute(
                 "SELECT manifest FROM dataset_revision WHERE tenant_id=? AND dataset_id=? AND revision=?",
@@ -1653,8 +1774,10 @@ def create_app(data_dir: Path) -> FastAPI:
             if old_rev:
                 old_manifest = json.loads(old_rev["manifest"])
                 content_bytes = objects.get_revision_object(old_manifest["objects"][0]["key"])
+            else:
+                return api_error(422, "refresh_failed", "No previous revision found to refresh from.")
         else:
-            raise HTTPException(422, json.dumps({"code": "refresh_failed", "detail": "Must provide csv_content or use_previous_revision flag"}))
+            return api_error(422, "refresh_failed", "Must provide either csv_content or set use_previous_revision to refresh the pilot dataset.")
 
         obj_res = objects.put_revision_object(tenant, dataset_id, new_rev_no, f"refresh-rev-{new_rev_no}.parquet", content_bytes)
         manifest = {"objects": [{"key": obj_res["key"]}]}
@@ -1947,44 +2070,6 @@ def create_app(data_dir: Path) -> FastAPI:
             "verdict_recommendation": "supported_improvement",
             "existing_outcome": dec.outcome.__dict__ if dec.outcome else None,
         }
-
-    @app.post("/v1/decisions/{decision_id}/outcome")
-    async def record_decision_outcome_api(decision_id: str, request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
-        tenant, user = ctx(x_tenant, x_user)
-        body = await request.json()
-        from .register import record_outcome, OutcomeRecord, Verdict
-        try:
-            verdict_enum = Verdict(body.get("review_verdict", "supported_improvement"))
-        except ValueError:
-            verdict_enum = Verdict.SUPPORTED_IMPROVEMENT
-
-        outcome_rec = OutcomeRecord(
-            observed_results=body.get("observed_results", {}),
-            pinned_definition_version=body.get("pinned_definition_version", 1),
-            data_revision=body.get("data_revision", 1),
-            measurement_window=body.get("measurement_window", "14d"),
-            expectation=body.get("expectation", "reduce breach rate"),
-            estimated_effect=body.get("estimated_effect", -7.3),
-            study_run=body.get("study_run"),
-            data_quality_caveats=body.get("data_quality_caveats", []),
-            review_verdict=verdict_enum,
-            verdict_evidence=body.get("verdict_evidence", "Observed 7.3% breach rate reduction post implementation."),
-        )
-
-        try:
-            updated_dec = record_outcome(
-                store.conn,
-                tenant_id=tenant,
-                decision_id=decision_id,
-                outcome=outcome_rec,
-                author=user,
-                reason=body.get("reason", "Recorded decision outcome review"),
-            )
-            return {"decision_id": updated_dec.id, "status": updated_dec.status.value, "outcome": outcome_rec.__dict__}
-        except LookupError:
-            raise HTTPException(404, "not found")
-        except ValueError as e:
-            raise HTTPException(422, json.dumps({"code": "invalid_outcome_record", "detail": str(e)}))
 
     app.state.store = store
     app.state.objects = objects
