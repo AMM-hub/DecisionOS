@@ -14,6 +14,13 @@ dependencies = [
   "python-dateutil>=2.9",
   "scipy>=1.14",
   "scikit-learn>=1.5",
+  # imported directly by the runtime modules; previously only present in the
+  # developer venv, which made a clean install (CI / Docker) unable to collect tests
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "pulp>=2.9,<4",  # pulp 4.x removed the LpStatus* constants this module uses
+  "simpy>=4.1",
+  "pm4py>=2.7",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,17 @@ Requires-Dist: polars>=1.16
 Requires-Dist: pydantic>=2.9
 Requires-Dist: fastapi>=0.115
 Requires-Dist: uvicorn>=0.32
+Requires-Dist: statsforecast>=2.1
+Requires-Dist: tqdm>=4.66
+Requires-Dist: pytz>=2024.1
+Requires-Dist: python-dateutil>=2.9
+Requires-Dist: scipy>=1.14
+Requires-Dist: scikit-learn>=1.5
+Requires-Dist: numpy>=1.26
+Requires-Dist: pandas>=2.2
+Requires-Dist: pulp<4,>=2.9
+Requires-Dist: simpy>=4.1
+Requires-Dist: pm4py>=2.7
 Provides-Extra: dev
 Requires-Dist: pytest>=8.3; extra == "dev"
 Requires-Dist: httpx>=0.28; extra == "dev"
