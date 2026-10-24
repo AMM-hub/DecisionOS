@@ -131,4 +131,14 @@ ignored unless `DECISIONOS_OIDC_ISSUER` is set. 9 no-network tests. End-to-end p
 returns 200. `scripts/seed_demo.py` seeds a coherent demo idempotently (run 1: 6 created, run 2: 0 created /
 6 skipped).
 
+**CI e2e first run failed — and that was the value.** The job died at "wait for readiness". Cause:
+compose bind-mounted `./var:/app/var` while the API image runs as the unprivileged `worker` user; on a
+Linux runner the host directory is owned by uid 1001, so the container could not create its data dir.
+Docker Desktop on Windows hid this for weeks. Fixed with a named `api-data` volume and a pre-created
+`/app/var/worker` in the image. Verified locally (fresh volume boots at schema_version 2, `writable: true`,
+`POST /v1/decisions` → 201).
+
+**CI run `8c5d29d` = success, all three jobs: backend, frontend, e2e** (build images → up --wait →
+52-config sweep → artifacts → teardown).
+
 **Open:** P9 licence decision (pm4py AGPL v3) — business call, not code. Everything else in R7–R12 is closed.
