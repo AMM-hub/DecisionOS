@@ -102,6 +102,13 @@ DecisionOS is a decision intelligence platform comprising:
 - **RBAC is enforced per route:** mutating routes are mapped to permissions (`write`, `approve`, `transition`, `manage_pilot`, ...) and a role lacking one receives `403` with `code: "forbidden"`.
 - **Environment:** `DECISIONOS_AUTH_STRICT`, `DECISIONOS_JWT_SECRET`, `DECISIONOS_ALLOW_TOKEN_MINT`, `DECISIONOS_DATA_DIR` (see `.env.example`).
 
+## Schema Migrations
+- **Mechanism:** `decisionos_analytics/migrations.py` owns an ordered `MIGRATIONS` list of `(version, name, apply)` tuples. `Store` boot calls `apply_pending(conn)` instead of executing `CREATE TABLE IF NOT EXISTS` ad hoc.
+- **Tracking:** Applied versions are recorded in `schema_version(version, name, applied_at)`. Each pending migration and its version row commit in one transaction.
+- **Current versions:** `1 = initial_schema` (baseline tables; idempotent for pre-migration databases) and `2 = decision_tenant_unique` (rebuilds `decision` so `(tenant_id, id)` is a valid composite parent key for `decision_evidence_binding`).
+- **Adding a migration:** append `(N + 1, "description", apply_fn)`; never edit or reorder an already-applied migration. `apply_fn` receives a `sqlite3.Connection` and must be safe for both fresh and populated databases. Add a test in `tests/test_migrations.py`.
+- **Boot guard:** if `schema_version` is newer than the code maximum, `apply_pending` raises `RuntimeError` naming both versions and the service refuses to start, preventing an old binary from writing into a newer schema.
+
 ## List Endpoints
 Every `GET` list endpoint accepts bounded pagination:
 - `limit` — integer, `1..500`, default `50`.
