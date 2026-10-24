@@ -14,6 +14,73 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+AI_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ai_provider (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'openai_compatible',
+  base_url TEXT NOT NULL,
+  api_key_enc TEXT NOT NULL,
+  models_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'active',
+  last_tested_at TEXT,
+  last_error TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  UNIQUE (tenant_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS ai_model_role (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  role TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, role),
+  FOREIGN KEY (tenant_id, provider_id) REFERENCES ai_provider(tenant_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ai_conversation (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_message (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tool_trace_json TEXT NOT NULL DEFAULT '[]',
+  usage_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id, conversation_id) REFERENCES ai_conversation(tenant_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  latency_ms INTEGER,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+"""
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
@@ -415,7 +482,7 @@ CREATE TABLE IF NOT EXISTS analysis_artifact (
   PRIMARY KEY (tenant_id, id),
   UNIQUE (tenant_id, name)
 );
-"""
+""" + AI_SCHEMA
 
 SCHEMA_VERSION_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -623,11 +690,17 @@ def _migration_004_analysis_artifact(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_005_ai_layer(conn: sqlite3.Connection) -> None:
+    """Provider registry, model-role routing, conversations, and usage ledger."""
+    _execute_script(conn, AI_SCHEMA)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "initial_schema", _migration_001_initial_schema),
     (2, "decision_tenant_unique", _migration_002_decision_tenant_unique),
     (3, "evidence_definition_version_nullable", _migration_003_evidence_definition_version_nullable),
     (4, "analysis_artifact", _migration_004_analysis_artifact),
+    (5, "ai_layer", _migration_005_ai_layer),
 ]
 
 

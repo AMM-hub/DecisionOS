@@ -181,6 +181,47 @@ def get_pilot(store: Store, tenant_id: str, pilot_id: str) -> dict[str, Any] | N
     return d
 
 
+def pilot_summary(store: Store, tenant_id: str, pilot_id: str) -> dict[str, Any] | None:
+    """Stored pilot plus live aggregate counts from the tenant's other entities."""
+    pilot = get_pilot(store, tenant_id, pilot_id)
+    if pilot is None:
+        return None
+
+    def count(sql: str, params: tuple[Any, ...]) -> int:
+        return store.conn.execute(sql, params).fetchone()["c"]
+
+    summary = {
+        "open_alerts": count(
+            "SELECT count(*) as c FROM alert_episode WHERE tenant_id=? AND resolved_at IS NULL",
+            (tenant_id,),
+        ),
+        "high_risk_cases": count(
+            "SELECT count(*) as c FROM predictive_prediction WHERE tenant_id=? AND risk_tier='HIGH'",
+            (tenant_id,),
+        ),
+        "active_investigations": count(
+            "SELECT count(*) as c FROM investigation WHERE tenant_id=? AND status != 'closed'",
+            (tenant_id,),
+        ),
+        "open_decisions": count(
+            "SELECT count(*) as c FROM decision WHERE tenant_id=? "
+            "AND status IN ('draft', 'proposed', 'accepted', 'active')",
+            (tenant_id,),
+        ),
+        "reviews_due": count(
+            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status='review_due'",
+            (tenant_id,),
+        ),
+        "completed_reviews": count(
+            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status IN ('evaluated', 'closed')",
+            (tenant_id,),
+        ),
+        "data_readiness": "PASS" if pilot.get("dataset_revision") else "INCOMPLETE",
+        "auth_security_gate": "INTERNAL_EVALUATION_ONLY",
+    }
+    return {"pilot": pilot, "summary": summary}
+
+
 def count_pilots(store: Store, tenant_id: str) -> int:
     return store.conn.execute(
         "SELECT COUNT(*) c FROM pilot WHERE tenant_id=?",

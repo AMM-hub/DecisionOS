@@ -164,3 +164,38 @@
 **Consequences.** Fast demo, real backend RBAC tests, and an explicit, visible “internal evaluation only” posture. The cost is that the shipped product cannot authenticate against its own secure backend; the actor selector could be mistaken for authorization. Superseded by P2 (OIDC PKCE login, refresh, logout, role-aware UI).
 
 **Evidence.** `apps/web/composables/api.ts:30-36`, `api.py:72-79,318-347`, `security.py:201-264`, `PROJECT.md` runtime security section.
+
+---
+
+## ADR-011 — Deployment target: local / self-hosted first
+
+**Date:** 2026-10-24 · **Status:** accepted (owner: "currently I might make it locally")
+
+**Context.** The product may be run on a single machine or an on-prem box rather than as
+multi-tenant SaaS. That changes which constraints bind now and which can wait.
+
+**Decision.** Optimise for local/self-hosted operation; keep the code deployment-agnostic but do not
+pay for distributed complexity yet.
+
+Consequences, explicitly:
+- **pm4py (AGPL v3) stays.** AGPL obligations attach to distribution or to serving third parties over a
+  network. Running it locally for yourself/your organisation is the low-risk case. Keep it isolated
+  behind the workflow module boundary so it can be swapped without touching API contracts.
+  Revisit immediately if: you ship binaries/images to customers, host it for other organisations, or
+  embed it in a product you sell. Options remain: buy a commercial licence, or replace with a permissive
+  process-mining implementation (variant/conformance algorithms on Polars are feasible for the 5
+  endpoints in use).
+- **SQLite stays.** Single-writer is fine for one node. Add WAL mode (already on) and keep
+  `scripts/backup_db.py` scheduled. Migrate to Postgres only when concurrent writers or >1 node appear.
+- **In-process rate limiting and metrics stay.** They are correct for one process; document that they
+  do not coordinate across replicas.
+- **Keycloak is optional.** For a single local operator, strict HMAC auth with a generated secret is
+  sufficient; OIDC becomes relevant with multiple humans or SSO. The SPA login screen is therefore P2/P3,
+  not a blocker for local use.
+- **Docker Compose is the deployment unit.** `docker compose up` + `scripts/seed_demo.py` is the whole
+  install story; no Kubernetes, no queue, no external blob store.
+- **Backups matter more locally** (no managed snapshots): nightly `backup_db.py` + off-machine copy.
+
+**Alternatives rejected.** Multi-tenant SaaS hardening now (K8s, Postgres, distributed limiter) —
+unjustified cost for a single-node deployment; removing pm4py now — unnecessary risk while deployment
+stays local, but the seam must exist.

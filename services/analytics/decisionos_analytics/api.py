@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sqlite3
 import time
 import uuid
 from contextvars import ContextVar
@@ -22,6 +23,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 
 def page_params(
@@ -32,6 +34,11 @@ def page_params(
 
 
 from . import operations
+from .ai.agent import run_agent
+from .ai.constants import MODEL_ROLES
+from .ai.crypto import decrypt_secret, encrypt_secret, ensure_configured, key_fingerprint
+from .ai.providers import OpenAICompatibleProvider, ProviderError
+from .ai.tools import ToolContext
 from .analytics.query import AnalyticsQuery, AnalyticsQueryError, run_query
 from .artifacts import (
     ArtifactError,
@@ -136,6 +143,7 @@ def create_app(data_dir: Path) -> FastAPI:
     operations.configure_logging()
     get_jwt_secret()
     data_dir.mkdir(parents=True, exist_ok=True)
+    ensure_configured(data_dir)
     store = Store(data_dir / "control.sqlite3")
     objects = LocalObjectStore(data_dir / "objects")
     store.conn.executescript(
@@ -150,10 +158,12 @@ def create_app(data_dir: Path) -> FastAPI:
 
     metrics = operations.Metrics()
     limiter = operations.TokenBucketLimiter(operations.rate_limit_from_env())
+    ai_tool_limiter = operations.TokenBucketLimiter(operations.rate_limit_from_env())
 
     app = FastAPI(title="DecisionOS local control plane (demo stand-in)", version="0.1.0")
     app.state.metrics = metrics
     app.state.rate_limiter = limiter
+    app.state.ai_tool_limiter = ai_tool_limiter
     # Demo local dev only: the Nuxt SPA (:3000) calls this (:8100) with custom
     # X-Tenant/X-User headers, which triggers a CORS preflight. Production
     # fronting is the Laravel API same-origin (§21.2); do not ship this wide-open.
@@ -2225,55 +2235,12 @@ def create_app(data_dir: Path) -> FastAPI:
     @app.get("/v1/pilots/{pilot_id}/summary")
     async def get_pilot_summary_api(pilot_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, _ = ctx(x_tenant, x_user)
-        from .pilot import get_pilot
-        pilot = get_pilot(store, tenant, pilot_id)
-        if pilot is None:
+        from .pilot import pilot_summary
+
+        payload = pilot_summary(store, tenant, pilot_id)
+        if payload is None:
             raise HTTPException(404, "not found")
-
-        # Aggregate counts from stored entities
-        open_alerts = store.conn.execute(
-            "SELECT count(*) as c FROM alert_episode WHERE tenant_id=? AND resolved_at IS NULL",
-            (tenant,),
-        ).fetchone()["c"]
-
-        high_risk = store.conn.execute(
-            "SELECT count(*) as c FROM predictive_prediction WHERE tenant_id=? AND risk_tier='HIGH'",
-            (tenant,),
-        ).fetchone()["c"]
-
-        active_inv = store.conn.execute(
-            "SELECT count(*) as c FROM investigation WHERE tenant_id=? AND status != 'closed'",
-            (tenant,),
-        ).fetchone()["c"]
-
-        open_decisions = store.conn.execute(
-            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status IN ('draft', 'proposed', 'accepted', 'active')",
-            (tenant,),
-        ).fetchone()["c"]
-
-        reviews_due = store.conn.execute(
-            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status='review_due'",
-            (tenant,),
-        ).fetchone()["c"]
-
-        completed_reviews = store.conn.execute(
-            "SELECT count(*) as c FROM decision WHERE tenant_id=? AND status IN ('evaluated', 'closed')",
-            (tenant,),
-        ).fetchone()["c"]
-
-        return {
-            "pilot": pilot,
-            "summary": {
-                "open_alerts": open_alerts,
-                "high_risk_cases": high_risk,
-                "active_investigations": active_inv,
-                "open_decisions": open_decisions,
-                "reviews_due": reviews_due,
-                "completed_reviews": completed_reviews,
-                "data_readiness": "PASS" if pilot.get("dataset_revision") else "INCOMPLETE",
-                "auth_security_gate": "INTERNAL_EVALUATION_ONLY",
-            }
-        }
+        return payload
 
     @app.post("/v1/pilots/bootstrap", status_code=201)
     async def bootstrap_pilot_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -2537,6 +2504,597 @@ def create_app(data_dir: Path) -> FastAPI:
                 "Values that could not be computed are null and listed in 'unavailable'."
             ),
             "existing_outcome": dec.outcome.__dict__ if dec.outcome else None,
+        }
+
+    # ---- AI provider registry, routing, conversations, usage ------------
+    def _provider_payload(row) -> dict[str, Any]:
+        try:
+            models = json.loads(row["models_json"] or "[]")
+        except (TypeError, ValueError):
+            models = []
+        if not isinstance(models, list):
+            models = []
+        try:
+            suffix = "\u2026" + decrypt_secret(row["api_key_enc"])[-4:]
+        except (ValueError, TypeError):
+            suffix = "\u2026"
+        try:
+            fingerprint = key_fingerprint()
+        except RuntimeError:
+            fingerprint = ""
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "base_url": row["base_url"],
+            "models": models,
+            "status": row["status"],
+            "last_tested_at": row["last_tested_at"],
+            "last_error": row["last_error"],
+            "key_suffix": suffix,
+            "key_fingerprint": fingerprint,
+            "created_by": row["created_by"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _provider_row(tenant: str, provider_id: str):
+        return store.conn.execute(
+            "SELECT * FROM ai_provider WHERE tenant_id=? AND id=?", (tenant, provider_id)
+        ).fetchone()
+
+    def _coerce_models(raw: Any) -> list[str]:
+        if raw is None:
+            return []
+        if not isinstance(raw, list) or any(not isinstance(item, str) or not item.strip() for item in raw):
+            raise ValueError("Field 'models' must be a list of non-empty strings.")
+        return [item.strip() for item in raw]
+
+    def _coerce_base_url(raw: Any) -> str:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("Field 'base_url' is required and must be a string.")
+        value = raw.strip().rstrip("/")
+        if not (value.startswith("https://") or value.startswith("http://")):
+            raise ValueError("Field 'base_url' must start with http:// or https://.")
+        return value
+
+    def _models_payload(tenant: str) -> dict[str, Any]:
+        resolved: dict[str, Any] = {role: None for role in MODEL_ROLES}
+        rows = store.conn.execute(
+            "SELECT r.role, r.provider_id, r.model_id, p.name AS provider_name, p.status AS provider_status "
+            "FROM ai_model_role r LEFT JOIN ai_provider p "
+            " ON p.tenant_id=r.tenant_id AND p.id=r.provider_id WHERE r.tenant_id=?",
+            (tenant,),
+        ).fetchall()
+        for row in rows:
+            if row["role"] in resolved:
+                resolved[row["role"]] = {
+                    "provider_id": row["provider_id"],
+                    "provider_name": row["provider_name"],
+                    "provider_status": row["provider_status"],
+                    "model_id": row["model_id"],
+                }
+        return {**resolved, "roles": resolved}
+
+    @app.post("/v1/ai/providers", status_code=201)
+    async def create_ai_provider(
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return api_error(400, "malformed_json", "Invalid JSON body format.")
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return api_error(422, "missing_field", "Field 'name' is required.")
+        kind = body.get("kind", "openai_compatible")
+        if kind != "openai_compatible":
+            return api_error(422, "unsupported_kind", "Only 'openai_compatible' providers are supported.")
+        api_key = body.get("api_key")
+        if not isinstance(api_key, str) or not api_key.strip():
+            return api_error(422, "missing_field", "Field 'api_key' is required.")
+        try:
+            base_url = _coerce_base_url(body.get("base_url"))
+            models = _coerce_models(body.get("models", []))
+        except ValueError as exc:
+            return api_error(422, "invalid_value", str(exc))
+
+        provider_id = new_id()
+        timestamp = now_iso()
+        try:
+            store.conn.execute(
+                "INSERT INTO ai_provider(tenant_id,id,name,kind,base_url,api_key_enc,models_json,status,"
+                "created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    tenant, provider_id, name.strip(), kind, base_url,
+                    encrypt_secret(api_key.strip()), json.dumps(models),
+                    "active", user, timestamp, timestamp,
+                ),
+            )
+            store.conn.commit()
+        except sqlite3.IntegrityError:
+            return api_error(409, "provider_exists", "A provider with this name already exists.")
+        store.audit(tenant, user, "ai.provider.create", provider_id, "created", {"name": name.strip(), "kind": kind})
+        return _provider_payload(_provider_row(tenant, provider_id))
+
+    @app.get("/v1/ai/providers")
+    async def list_ai_providers(
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        rows = store.conn.execute(
+            "SELECT * FROM ai_provider WHERE tenant_id=? ORDER BY name ASC", (tenant,)
+        ).fetchall()
+        return [_provider_payload(row) for row in rows]
+
+    @app.post("/v1/ai/providers/{provider_id}/test")
+    async def test_ai_provider(
+        provider_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        row = _provider_row(tenant, provider_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        try:
+            models = json.loads(row["models_json"] or "[]")
+        except (TypeError, ValueError):
+            models = []
+        try:
+            api_key = decrypt_secret(row["api_key_enc"])
+        except (ValueError, TypeError):
+            error = "Stored provider credential could not be decrypted."
+            store.execute_with_retry(
+                "UPDATE ai_provider SET status='error', last_error=?, last_tested_at=?, updated_at=? "
+                "WHERE tenant_id=? AND id=?",
+                (error, now_iso(), now_iso(), tenant, provider_id),
+            )
+            return {"ok": False, "latency_ms": 0, "models_seen": models, "error": error}
+
+        provider = OpenAICompatibleProvider(
+            name=row["name"], base_url=row["base_url"], api_key=api_key, models=models
+        )
+        probe = await run_in_threadpool(provider.test_connection, models[0] if models else None)
+        timestamp = now_iso()
+        store.execute_with_retry(
+            "UPDATE ai_provider SET status=?, last_tested_at=?, last_error=?, updated_at=? "
+            "WHERE tenant_id=? AND id=?",
+            ("active" if probe["ok"] else "error", timestamp, probe.get("error"), timestamp, tenant, provider_id),
+        )
+        store.audit(
+            tenant, user, "ai.provider.test", provider_id,
+            "success" if probe["ok"] else "failed", {"error": probe.get("error")},
+        )
+        return {
+            "ok": bool(probe["ok"]),
+            "latency_ms": probe["latency_ms"],
+            "models_seen": models,
+            "error": probe.get("error"),
+        }
+
+    @app.put("/v1/ai/providers/{provider_id}")
+    async def update_ai_provider(
+        provider_id: str,
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        row = _provider_row(tenant, provider_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return api_error(400, "malformed_json", "Invalid JSON body format.")
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+
+        updates: list[str] = []
+        params: list[Any] = []
+        changed: list[str] = []
+        if "name" in body:
+            name = body.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return api_error(422, "invalid_value", "Field 'name' must be a non-empty string.")
+            updates.append("name=?")
+            params.append(name.strip())
+            changed.append("name")
+        if "base_url" in body:
+            try:
+                base_url = _coerce_base_url(body.get("base_url"))
+            except ValueError as exc:
+                return api_error(422, "invalid_value", str(exc))
+            updates.append("base_url=?")
+            params.append(base_url)
+            changed.append("base_url")
+        if "models" in body:
+            try:
+                models = _coerce_models(body.get("models"))
+            except ValueError as exc:
+                return api_error(422, "invalid_value", str(exc))
+            updates.append("models_json=?")
+            params.append(json.dumps(models))
+            changed.append("models")
+        if "api_key" in body:
+            api_key = body.get("api_key")
+            if not isinstance(api_key, str) or not api_key.strip():
+                return api_error(422, "invalid_value", "Field 'api_key' must be a non-empty string.")
+            updates.extend(["api_key_enc=?", "status=?", "last_error=?"])
+            params.extend([encrypt_secret(api_key.strip()), "active", None])
+            changed.append("api_key")
+        if not updates:
+            return _provider_payload(row)
+
+        updates.append("updated_at=?")
+        params.extend([now_iso(), tenant, provider_id])
+        try:
+            store.execute_with_retry(
+                f"UPDATE ai_provider SET {', '.join(updates)} WHERE tenant_id=? AND id=?", tuple(params)
+            )
+        except sqlite3.IntegrityError:
+            return api_error(409, "provider_exists", "A provider with this name already exists.")
+        store.audit(tenant, user, "ai.provider.update", provider_id, "updated", {"fields": changed})
+        return _provider_payload(_provider_row(tenant, provider_id))
+
+    @app.delete("/v1/ai/providers/{provider_id}")
+    async def delete_ai_provider(
+        provider_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        row = _provider_row(tenant, provider_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        with store.conn:
+            store.conn.execute("DELETE FROM ai_model_role WHERE tenant_id=? AND provider_id=?", (tenant, provider_id))
+            store.conn.execute("DELETE FROM ai_provider WHERE tenant_id=? AND id=?", (tenant, provider_id))
+        store.audit(tenant, user, "ai.provider.delete", provider_id, "deleted")
+        return {"deleted": True, "id": provider_id}
+
+    @app.get("/v1/ai/models")
+    async def get_ai_models(
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        return _models_payload(tenant)
+
+    @app.put("/v1/ai/models")
+    async def put_ai_models(
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return api_error(400, "malformed_json", "Invalid JSON body format.")
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        entries = body.get("roles") if isinstance(body.get("roles"), dict) else body
+        if not isinstance(entries, dict) or not entries:
+            return api_error(422, "missing_field", "Provide at least one role mapping.")
+        for role, value in entries.items():
+            if role not in MODEL_ROLES:
+                return api_error(422, "unknown_role", f"Unknown model role '{role}'.")
+            if not isinstance(value, dict):
+                return api_error(422, "invalid_value", f"Role '{role}' must map to an object.")
+            provider_id = value.get("provider_id")
+            model_id = value.get("model_id")
+            if not isinstance(provider_id, str) or not provider_id:
+                return api_error(422, "missing_field", f"Role '{role}' requires 'provider_id'.")
+            if not isinstance(model_id, str) or not model_id.strip():
+                return api_error(422, "missing_field", f"Role '{role}' requires 'model_id'.")
+            if _provider_row(tenant, provider_id) is None:
+                raise HTTPException(404, "not found")
+            store.execute_with_retry(
+                "INSERT INTO ai_model_role(tenant_id,role,provider_id,model_id,updated_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(tenant_id,role) DO UPDATE SET "
+                "provider_id=excluded.provider_id, model_id=excluded.model_id, updated_at=excluded.updated_at",
+                (tenant, role, provider_id, model_id.strip(), now_iso()),
+            )
+        store.audit(tenant, user, "ai.models.update", "roles", "updated", {"roles": list(entries.keys())})
+        return _models_payload(tenant)
+
+    @app.post("/v1/ai/chat")
+    async def ai_chat(
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return api_error(400, "malformed_json", "Invalid JSON body format.")
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        message = body.get("message")
+        if not isinstance(message, str) or not message.strip():
+            return api_error(422, "missing_field", "Field 'message' is required.")
+        conversation_id = body.get("conversation_id")
+
+        if conversation_id is not None and not isinstance(conversation_id, str):
+            return api_error(422, "invalid_value", "Field 'conversation_id' must be a string.")
+        if conversation_id:
+            conversation = store.conn.execute(
+                "SELECT * FROM ai_conversation WHERE tenant_id=? AND id=?",
+                (tenant, conversation_id),
+            ).fetchone()
+            if conversation is None:
+                raise HTTPException(404, "not found")
+        else:
+            conversation_id = new_id()
+            timestamp = now_iso()
+            title = message.strip().replace("\n", " ")[:60] or "New conversation"
+            store.conn.execute(
+                "INSERT INTO ai_conversation(tenant_id,id,title,created_by,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (tenant, conversation_id, title, user, timestamp, timestamp),
+            )
+            store.conn.commit()
+
+        user_message_id = new_id()
+        user_created_at = now_iso()
+        store.conn.execute(
+            "INSERT INTO ai_message(tenant_id,id,conversation_id,role,content,tool_trace_json,usage_json,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (tenant, user_message_id, conversation_id, "user", message, "[]", "{}", user_created_at),
+        )
+        store.conn.execute(
+            "UPDATE ai_conversation SET updated_at=? WHERE tenant_id=? AND id=?",
+            (user_created_at, tenant, conversation_id),
+        )
+        store.conn.commit()
+
+        mapping = store.conn.execute(
+            "SELECT r.provider_id, r.model_id, p.* FROM ai_model_role r "
+            "JOIN ai_provider p ON p.tenant_id=r.tenant_id AND p.id=r.provider_id "
+            "WHERE r.tenant_id=? AND r.role='primary'",
+            (tenant,),
+        ).fetchone()
+        if mapping is None:
+            store.audit(tenant, user, "ai.chat", conversation_id, "refused", {"code": "ai_model_not_configured"})
+            return api_error(409, "ai_model_not_configured", "No primary AI model is configured for this tenant.")
+        try:
+            api_key = decrypt_secret(mapping["api_key_enc"])
+        except (ValueError, TypeError):
+            return api_error(409, "provider_credential_unavailable", "The configured provider credential is unavailable.")
+        try:
+            models = json.loads(mapping["models_json"] or "[]")
+        except (TypeError, ValueError):
+            models = []
+        provider = OpenAICompatibleProvider(
+            name=mapping["name"], base_url=mapping["base_url"], api_key=api_key, models=models
+        )
+        history = store.conn.execute(
+            "SELECT role, content FROM ai_message WHERE tenant_id=? AND conversation_id=? AND id<>? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (tenant, conversation_id, user_message_id),
+        ).fetchall()
+        messages = [{"role": row["role"], "content": row["content"]} for row in history]
+        tool_context = ToolContext(
+            store=store,
+            objects=objects,
+            tenant_id=tenant,
+            user=user,
+            role=role_of(user),
+            limiter=ai_tool_limiter,
+        )
+        chat_started = time.perf_counter()
+        try:
+            agent_result = await run_in_threadpool(
+                run_agent,
+                provider,
+                model=mapping["model_id"],
+                tool_context=tool_context,
+                user_prompt=message,
+                history=messages,
+            )
+        except ProviderError as exc:
+            store.audit(tenant, user, "ai.chat", conversation_id, "failed", {"code": exc.code})
+            return api_error(502, "provider_error", str(exc))
+        latency_ms = int((time.perf_counter() - chat_started) * 1000)
+
+        usage = agent_result.get("usage") or {}
+        assistant_message_id = new_id()
+        assistant_created_at = now_iso()
+        store.conn.execute(
+            "INSERT INTO ai_message(tenant_id,id,conversation_id,role,content,tool_trace_json,usage_json,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                tenant, assistant_message_id, conversation_id, "assistant",
+                agent_result["answer"], json.dumps(agent_result["tool_calls"], default=str),
+                json.dumps(usage), assistant_created_at,
+            ),
+        )
+        store.conn.execute(
+            "INSERT INTO ai_usage(tenant_id,id,provider_id,model_id,prompt_tokens,completion_tokens,"
+            "cost_usd,latency_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                tenant, new_id(), mapping["provider_id"], mapping["model_id"],
+                int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0),
+                None, latency_ms, assistant_created_at,
+            ),
+        )
+        store.conn.execute(
+            "UPDATE ai_conversation SET updated_at=? WHERE tenant_id=? AND id=?",
+            (assistant_created_at, tenant, conversation_id),
+        )
+        store.conn.commit()
+        store.audit(
+            tenant, user, "ai.chat", conversation_id, "answered",
+            {
+                "tool_calls": len(agent_result["tool_calls"]),
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+            },
+        )
+        return {
+            **agent_result,
+            "latency_ms": latency_ms,
+            "conversation_id": conversation_id,
+            "message_id": assistant_message_id,
+            "provider_id": mapping["provider_id"],
+            "model_id": mapping["model_id"],
+        }
+
+    @app.get("/v1/ai/conversations")
+    async def list_ai_conversations(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
+        total = store.conn.execute(
+            "SELECT COUNT(*) c FROM ai_conversation WHERE tenant_id=? AND archived=0", (tenant,)
+        ).fetchone()["c"]
+        rows = store.conn.execute(
+            "SELECT c.*, (SELECT COUNT(*) FROM ai_message m WHERE m.tenant_id=c.tenant_id "
+            " AND m.conversation_id=c.id) AS message_count "
+            "FROM ai_conversation c WHERE c.tenant_id=? AND c.archived=0 "
+            "ORDER BY c.updated_at DESC LIMIT ? OFFSET ?",
+            (tenant, limit, offset),
+        ).fetchall()
+        response.headers["X-Total-Count"] = str(total)
+        return [dict(row) for row in rows]
+
+    @app.get("/v1/ai/conversations/{conversation_id}")
+    async def get_ai_conversation(
+        conversation_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        conversation = store.conn.execute(
+            "SELECT * FROM ai_conversation WHERE tenant_id=? AND id=?",
+            (tenant, conversation_id),
+        ).fetchone()
+        if conversation is None:
+            raise HTTPException(404, "not found")
+        messages = store.conn.execute(
+            "SELECT * FROM ai_message WHERE tenant_id=? AND conversation_id=? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (tenant, conversation_id),
+        ).fetchall()
+        payload_messages = []
+        for row in messages:
+            try:
+                tool_trace = json.loads(row["tool_trace_json"] or "[]")
+            except (TypeError, ValueError):
+                tool_trace = []
+            try:
+                message_usage = json.loads(row["usage_json"] or "{}")
+            except (TypeError, ValueError):
+                message_usage = {}
+            payload_messages.append(
+                {
+                    "id": row["id"],
+                    "role": row["role"],
+                    "content": row["content"],
+                    "tool_trace": tool_trace,
+                    "usage": message_usage,
+                    "created_at": row["created_at"],
+                }
+            )
+        return {
+            "id": conversation["id"],
+            "title": conversation["title"],
+            "created_by": conversation["created_by"],
+            "created_at": conversation["created_at"],
+            "updated_at": conversation["updated_at"],
+            "archived": bool(conversation["archived"]),
+            "messages": payload_messages,
+        }
+
+    @app.delete("/v1/ai/conversations/{conversation_id}")
+    async def delete_ai_conversation(
+        conversation_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        conversation = store.conn.execute(
+            "SELECT * FROM ai_conversation WHERE tenant_id=? AND id=?",
+            (tenant, conversation_id),
+        ).fetchone()
+        if conversation is None:
+            raise HTTPException(404, "not found")
+        with store.conn:
+            store.conn.execute(
+                "DELETE FROM ai_message WHERE tenant_id=? AND conversation_id=?",
+                (tenant, conversation_id),
+            )
+            store.conn.execute(
+                "DELETE FROM ai_conversation WHERE tenant_id=? AND id=?",
+                (tenant, conversation_id),
+            )
+        store.audit(tenant, user, "ai.conversation.delete", conversation_id, "deleted")
+        return {"deleted": True, "id": conversation_id}
+
+    @app.get("/v1/ai/usage")
+    async def get_ai_usage(
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        totals = store.conn.execute(
+            "SELECT COUNT(*) calls, COALESCE(SUM(prompt_tokens),0) prompt_tokens, "
+            "COALESCE(SUM(completion_tokens),0) completion_tokens, "
+            "SUM(cost_usd) cost_usd, COALESCE(SUM(latency_ms),0) latency_ms "
+            "FROM ai_usage WHERE tenant_id=?",
+            (tenant,),
+        ).fetchone()
+        by_provider = store.conn.execute(
+            "SELECT u.provider_id, p.name AS provider_name, COUNT(*) calls, "
+            "COALESCE(SUM(u.prompt_tokens),0) prompt_tokens, "
+            "COALESCE(SUM(u.completion_tokens),0) completion_tokens, SUM(u.cost_usd) cost_usd "
+            "FROM ai_usage u LEFT JOIN ai_provider p "
+            " ON p.tenant_id=u.tenant_id AND p.id=u.provider_id "
+            "WHERE u.tenant_id=? GROUP BY u.provider_id, p.name ORDER BY u.provider_id",
+            (tenant,),
+        ).fetchall()
+        by_model = store.conn.execute(
+            "SELECT provider_id, model_id, COUNT(*) calls, "
+            "COALESCE(SUM(prompt_tokens),0) prompt_tokens, "
+            "COALESCE(SUM(completion_tokens),0) completion_tokens, SUM(cost_usd) cost_usd "
+            "FROM ai_usage WHERE tenant_id=? GROUP BY provider_id, model_id "
+            "ORDER BY provider_id, model_id",
+            (tenant,),
+        ).fetchall()
+        by_day = store.conn.execute(
+            "SELECT substr(created_at,1,10) AS day, COUNT(*) calls, "
+            "COALESCE(SUM(prompt_tokens),0) prompt_tokens, "
+            "COALESCE(SUM(completion_tokens),0) completion_tokens, SUM(cost_usd) cost_usd "
+            "FROM ai_usage WHERE tenant_id=? GROUP BY day ORDER BY day DESC",
+            (tenant,),
+        ).fetchall()
+        by_provider_model_day = store.conn.execute(
+            "SELECT substr(created_at,1,10) AS day, provider_id, model_id, COUNT(*) calls, "
+            "COALESCE(SUM(prompt_tokens),0) prompt_tokens, "
+            "COALESCE(SUM(completion_tokens),0) completion_tokens, SUM(cost_usd) cost_usd "
+            "FROM ai_usage WHERE tenant_id=? GROUP BY day, provider_id, model_id "
+            "ORDER BY day DESC, provider_id, model_id",
+            (tenant,),
+        ).fetchall()
+        return {
+            "totals": dict(totals),
+            "by_provider": [dict(row) for row in by_provider],
+            "by_model": [dict(row) for row in by_model],
+            "by_day": [dict(row) for row in by_day],
+            "by_provider_model_day": [dict(row) for row in by_provider_model_day],
         }
 
     app.state.store = store

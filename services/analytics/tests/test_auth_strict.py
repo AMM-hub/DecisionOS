@@ -25,6 +25,7 @@ def strict_secret() -> str:
 def strict_client(monkeypatch, tmp_path, strict_secret):
     monkeypatch.setenv("DECISIONOS_AUTH_STRICT", "1")
     monkeypatch.setenv("DECISIONOS_JWT_SECRET", strict_secret)
+    monkeypatch.setenv("DECISIONOS_SECRET_KEY", "ai-master-key-at-least-32-bytes-long!!")
     app = create_app(tmp_path / "data")
     with TestClient(app) as c:
         yield c
