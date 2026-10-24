@@ -187,6 +187,8 @@ async function run() {
   await cdp.send('Log.enable');
 
   const results = [];
+  const failures = [];
+  const find = (rec, kind, detail) => failures.push({ config: `${rec.locale} ${rec.vw}x${rec.vh} ${rec.path}`, kind, detail });
 
   for (const locale of LOCALES) {
     for (const [vw, vh] of VIEWPORTS) {
@@ -237,6 +239,15 @@ async function run() {
         const rec = { route: name, path, locale, vw, vh, errors, exceptions, failedReqs, probe, shot: file };
         results.push(rec);
 
+        for (const e of errors) find(rec, 'console-error', e);
+        for (const e of exceptions) find(rec, 'exception', e);
+        for (const e of failedReqs) find(rec, 'failed-request', e);
+        if (probe?.probeError) find(rec, 'probe-error', probe.probeError);
+        if (probe?.hScroll > 0) find(rec, 'document-hscroll', `${probe.hScroll}px`);
+        for (const v of probe?.badValues || []) find(rec, 'bad-value', v);
+        for (const src of probe?.brokenImages || []) find(rec, 'broken-image', src || '(no src)');
+        if (typeof probe?.textLen === 'number' && probe.textLen < 60) find(rec, 'near-empty', `${probe.textLen} chars`);
+
         const flags = [];
         if (errors.length) flags.push(`${errors.length} consoleErr`);
         if (exceptions.length) flags.push(`${exceptions.length} exception`);
@@ -255,6 +266,12 @@ async function run() {
   console.log(`\nWrote ${results.length} records -> ${join(OUT_DIR, 'audit.json')}`);
   cdp.close();
   cleanup();
+
+  for (const f of failures) console.log(`  FAIL ${f.config} [${f.kind}] ${f.detail}`);
+  console.log(`FAILURES: ${failures.length}`);
+  const allow = process.env.ALLOW_FINDINGS === '1';
+  if (failures.length > 0 && !allow) process.exit(1);
+  if (failures.length > 0) console.log('ALLOW_FINDINGS=1 — exiting 0 despite failures');
   process.exit(0);
 }
 

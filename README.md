@@ -67,6 +67,18 @@ Set `NUXT_PUBLIC_API_BASE=http://127.0.0.1:8100/v1` to override the API endpoint
 
 ---
 
+## What CI runs
+
+| Job | What it proves |
+|-----|----------------|
+| `backend` | Ruff is clean and the Python suite passes with at least 85% coverage. |
+| `frontend` | The Nuxt app typechecks, its unit tests pass, and a production build succeeds. |
+| `e2e` | Docker images build, the API and web containers serve, and all 52 UI configs (13 routes × 2 viewports × 2 locales) load without console errors, exceptions, bad values, broken images, near-empty pages, or document-level horizontal scroll. Screenshots and `audit.json` are uploaded for 7 days. |
+
+`e2e` runs only after `backend` and `frontend` pass, so expensive container builds are gated by the fast checks.
+
+---
+
 ## Project Layout
 
 ```

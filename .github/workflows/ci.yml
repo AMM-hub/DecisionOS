@@ -58,3 +58,51 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start stack
+        run: docker compose up -d --wait
+
+      - name: Wait for api and web
+        run: |
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:8100/v1/health \
+              && curl -s -o /dev/null http://127.0.0.1:3000/; then
+              echo "stack reachable after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "stack did not become reachable within 60s"
+          exit 1
+
+      - name: UI audit sweep
+        run: CHROME_PATH=/usr/bin/google-chrome WEB_BASE_URL=http://127.0.0.1:3000 node scripts/ui_audit.mjs
+
+      - name: Dump compose logs
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-audit
+          path: var/ui_audit/
+          retention-days: 7
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
