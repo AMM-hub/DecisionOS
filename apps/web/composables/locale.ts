@@ -1,6 +1,10 @@
 import { ref, computed } from 'vue'
+import en from '~/locales/en.json'
+import ar from '~/locales/ar.json'
 
 export type Locale = 'en' | 'ar'
+
+const bundles: Record<Locale, Record<string, any>> = { en, ar }
 
 const currentLocale = ref<Locale>('en')
 
@@ -25,58 +29,27 @@ export function useLocale() {
   return { locale: currentLocale, setLocale, isRTL }
 }
 
-let messages: Record<string, any> | null = null
-
-export async function loadMessages(locale: Locale): Promise<Record<string, any>> {
-  if (messages) return messages
-  try {
-    const res = await fetch(`/locales/${locale}.json`)
-    if (res.ok) {
-      messages = await res.json()
-    }
-  } catch {
-    // fallback to empty
-  }
-  // Load English as fallback always
-  if (locale !== 'en') {
-    try {
-      const enRes = await fetch('/locales/en.json')
-      if (enRes.ok) {
-        const enData = await enRes.json()
-        if (!messages) messages = enData
-        else messages = deepMerge(enData, messages!)
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return messages || {}
-}
-
-function deepMerge(base: any, override: any): any {
-  const result = { ...base }
-  for (const key of Object.keys(override)) {
-    if (typeof override[key] === 'object' && override[key] !== null && !Array.isArray(override[key])) {
-      result[key] = deepMerge(result[key] || {}, override[key])
-    } else {
-      result[key] = override[key]
-    }
-  }
-  return result
-}
-
-export function t(path: string, locale: Locale = 'en'): string {
-  if (!messages) return path
+function resolve(bundle: Record<string, any>, path: string): string | undefined {
   const parts = path.split('.')
-  let current: any = messages
+  let current: any = bundle
   for (const part of parts) {
     if (current && typeof current === 'object' && part in current) {
       current = current[part]
     } else {
-      return path // fallback to key
+      return undefined
     }
   }
-  return typeof current === 'string' ? current : path
+  return typeof current === 'string' ? current : undefined
+}
+
+export function t(path: string, locale: Locale = 'en'): string {
+  const value = resolve(bundles[locale], path)
+  if (value !== undefined) return value
+  if (locale !== 'en') {
+    const fallback = resolve(bundles.en, path)
+    if (fallback !== undefined) return fallback
+  }
+  return path
 }
 
 export const SUPPORTED_LOCALES: Array<{ code: Locale; label: string; native: string }> = [

@@ -27,6 +27,20 @@ export function formatDateTime(iso: string | null | undefined, locale: string = 
   }).format(d)
 }
 
+export function formatRelative(iso: string | null | undefined, locale: string = 'en'): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000))
+  if (seconds < 60) return locale === 'ar' ? 'الآن' : 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return locale === 'ar' ? `قبل ${minutes} دقيقة` : `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return locale === 'ar' ? `قبل ${hours} ساعة` : `${hours} h ago`
+  const days = Math.floor(hours / 24)
+  return locale === 'ar' ? `قبل ${days} يوم` : `${days} d ago`
+}
+
 /** Short, human-readable handle for a UUID — full value stays in the tooltip. */
 export function shortId(id: string | null | undefined, len = 8): string {
   if (!id) return '—'

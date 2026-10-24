@@ -64,23 +64,27 @@ function stateBadge(s: Dataset['latest_revision_state']) {
 
 <template>
   <section>
-    <div class="row" style="justify-content: space-between">
-      <h1>Datasets</h1>
-      <button class="secondary" :disabled="loading" @click="load">{{ loading ? 'Loading…' : 'Refresh' }}</button>
-    </div>
-    <p class="muted">Confirm the business grain over the full dataset, then publish an immutable revision. Publishing is refused until the grain is confirmed (§9.2).</p>
+    <PageHeader
+      title="Datasets"
+      subtitle="Confirm the business grain over the full dataset, then publish an immutable revision. Publishing is refused until the grain is confirmed (§9.2)."
+    >
+      <template #actions>
+        <button class="secondary" :disabled="loading" @click="load">{{ loading ? 'Loading…' : 'Refresh' }}</button>
+      </template>
+    </PageHeader>
 
-    <div v-if="error" class="card"><span class="badge err">{{ error }}</span></div>
-    <div v-if="!datasets.length && !loading" class="card muted">No datasets yet. <NuxtLink to="/uploads">Upload and parse a file</NuxtLink> first.</div>
+    <DcCard v-if="error"><span class="badge err">{{ error }}</span></DcCard>
+    <DcCard v-if="!datasets.length && !loading">
+      <div class="muted">No datasets yet. <NuxtLink to="/uploads">Upload and parse a file</NuxtLink> first.</div>
+    </DcCard>
 
-    <div v-for="d in datasets" :key="d.dataset_id" class="card">
-      <div class="row" style="justify-content: space-between">
-        <h2 style="margin:0">{{ d.name }}
-          <span :class="['badge', d.grain_confirmed ? 'ok' : 'warn']">{{ d.grain_confirmed ? 'grain confirmed' : 'grain unconfirmed' }}</span>
-          <span :class="['badge', stateBadge(d.latest_revision_state)]">rev {{ d.latest_revision }} · {{ d.latest_revision_state }}</span>
-          <span v-if="d.revision != null" class="badge ok">published rev {{ d.revision }}</span>
-        </h2>
-      </div>
+    <DcCard v-for="d in datasets" :key="d.dataset_id" :title="d.name">
+      <template #actions>
+        <span :class="['badge', d.grain_confirmed ? 'ok' : 'warn']">{{ d.grain_confirmed ? 'grain confirmed' : 'grain unconfirmed' }}</span>
+        <span :class="['badge', stateBadge(d.latest_revision_state)]">rev {{ d.latest_revision }} · {{ d.latest_revision_state }}</span>
+        <span v-if="d.revision != null" class="badge ok">published rev {{ d.revision }}</span>
+      </template>
+
       <p class="muted">
         <code>{{ d.dataset_id.slice(0, 8) }}</code>
         · {{ d.row_count ?? '—' }} rows (published)
@@ -111,6 +115,6 @@ function stateBadge(s: Dataset['latest_revision_state']) {
         </table>
         <button :disabled="chosen[d.dataset_id] == null || busyId === d.dataset_id" @click="confirmGrain(d)" style="margin-top:0.5rem">Confirm grain</button>
       </div>
-    </div>
+    </DcCard>
   </section>
 </template>

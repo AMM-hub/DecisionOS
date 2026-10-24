@@ -96,16 +96,19 @@ function statusBadge(s: string) {
 
 <template>
   <section>
-    <div class="row" style="justify-content: space-between">
-      <h1>Scenario Studio</h1>
-      <button class="secondary" :disabled="loading" @click="loadTemplates">{{ loading ? 'Loading…' : 'Refresh templates' }}</button>
-    </div>
-    <p class="muted">What-if analysis, optimisation, and sensitivity for capacity decisions (§17). Fill in the allocation inputs and run the solver.</p>
+    <PageHeader
+      title="Scenario Studio"
+      subtitle="What-if analysis, optimisation, and sensitivity for capacity decisions (§17). Fill in the allocation inputs and run the solver."
+    >
+      <template #actions>
+        <button class="secondary" :disabled="loading" @click="loadTemplates">{{ loading ? 'Loading…' : 'Refresh templates' }}</button>
+      </template>
+    </PageHeader>
 
-    <div v-if="error" class="card"><span class="badge err">{{ error }}</span></div>
+    <DcCard v-if="error"><span class="badge err">{{ error }}</span></DcCard>
 
     <!-- Template selector -->
-    <div class="card">
+    <DcCard>
       <label class="field">
         Scenario template
         <select v-model="activeTemplate">
@@ -117,10 +120,10 @@ function statusBadge(s: string) {
       <p v-if="templates.find((t: ScenarioTemplate) => t.template_id === activeTemplate)" class="muted">
         {{ templates.find((t: ScenarioTemplate) => t.template_id === activeTemplate)?.description }}
       </p>
-    </div>
+    </DcCard>
 
     <!-- JSON editor -->
-    <div class="card">
+    <DcCard>
       <div class="row" style="justify-content: space-between">
         <label class="field" style="flex:1">
           Allocation Inputs <span class="muted">(JSON — see §17.3 formulation)</span>
@@ -131,27 +134,30 @@ function statusBadge(s: string) {
         <button class="secondary" @click="fillDefaults">Fill default segment/cost data</button>
         <button :disabled="busy" @click="solve">{{ busy ? 'Solving…' : 'Run solver' }}</button>
       </div>
-    </div>
+    </DcCard>
 
     <!-- Results -->
-    <div v-if="result" class="card">
-      <h2>Solver Result</h2>
-      <div class="grid cols-4">
-        <div class="stat">
-          <div class="n"><span :class="['badge', statusBadge(result.status)]">{{ result.status }}</span></div>
-          <span class="muted">Status</span>
+    <DcCard v-if="result" title="Solver Result">
+      <div class="kpi-band">
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Status</div>
+          <div class="k-val"><span :class="['badge', statusBadge(result.status)]">{{ result.status }}</span></div>
+          <div class="k-foot">solver outcome</div>
         </div>
-        <div class="stat">
-          <div class="n">{{ result.objective != null ? result.objective.toFixed(2) : '—' }}</div>
-          <span class="muted">Objective</span>
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Objective</div>
+          <div class="k-val">{{ result.objective != null ? result.objective.toFixed(2) : '—' }}</div>
+          <div class="k-foot">objective value</div>
         </div>
-        <div class="stat">
-          <div class="n">{{ result.runtime != null ? result.runtime.toFixed(3) + 's' : '—' }}</div>
-          <span class="muted">Runtime</span>
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Runtime</div>
+          <div class="k-val">{{ result.runtime != null ? result.runtime.toFixed(3) + 's' : '—' }}</div>
+          <div class="k-foot">wall-clock time</div>
         </div>
-        <div class="stat">
-          <div class="n">{{ result.variable_count }}</div>
-          <span class="muted">Variables</span>
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Variables</div>
+          <div class="k-val">{{ result.variable_count }}</div>
+          <div class="k-foot">decision variables</div>
         </div>
       </div>
       <div class="grid cols-3" style="margin-top: 0.5rem">
@@ -169,7 +175,7 @@ function statusBadge(s: string) {
         <h3>Infeasibility Report</h3>
         <pre class="muted" style="white-space: pre-wrap">{{ JSON.stringify(result.infeasibility_report, null, 2) }}</pre>
       </div>
-    </div>
+    </DcCard>
   </section>
 </template>
 

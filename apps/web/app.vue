@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { DEMO_ACTORS } from '~/composables/api'
-import { useLocale, SUPPORTED_LOCALES, loadMessages, t } from '~/composables/locale'
+import { useLocale, SUPPORTED_LOCALES, t } from '~/composables/locale'
 
 const route = useRoute()
 const { user, base } = useApi()
@@ -9,9 +9,6 @@ const health = ref<'checking' | 'ok' | 'down'>('checking')
 const healthPingMs = ref<number | null>(null)
 const { locale, setLocale } = useLocale()
 const mobileSidebarOpen = ref(false)
-
-// Load messages on startup
-await loadMessages(locale.value)
 
 async function ping() {
   health.value = 'checking'
@@ -97,7 +94,7 @@ function closeMobileNav() {
           <span class="brand-mark">D</span>
           <div class="brand-text">
             <span class="brand-name">{{ t('common.appName', locale) }}</span>
-            <span class="brand-env">tenant_alpha · v2</span>
+            <span class="brand-env">TENANT_ALPHA · V2</span>
           </div>
         </div>
 
@@ -108,6 +105,10 @@ function closeMobileNav() {
             <NuxtLink to="/pilot" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-gauge"/></svg>
               <span>{{ t('nav.pilotDashboard', locale) }}</span>
+            </NuxtLink>
+            <NuxtLink to="/pilot/setup" class="nav-item" @click="closeMobileNav">
+              <svg class="ico"><use href="#i-shield"/></svg>
+              <span>{{ t('nav.pilot', locale) }}</span>
             </NuxtLink>
             <NuxtLink to="/decisions" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-check-square"/></svg>
@@ -158,10 +159,6 @@ function closeMobileNav() {
             <NuxtLink to="/uploads" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-upload"/></svg>
               <span>{{ t('nav.uploads', locale) }}</span>
-            </NuxtLink>
-            <NuxtLink to="/pilot/setup" class="nav-item" @click="closeMobileNav">
-              <svg class="ico"><use href="#i-shield"/></svg>
-              <span>{{ t('nav.pilot', locale) }}</span>
             </NuxtLink>
           </div>
         </nav>
@@ -337,9 +334,15 @@ code,
   display: grid; place-items: center;
   font-family: var(--font-mono); font-size: 13px; font-weight: 600; letter-spacing: -0.04em;
 }
-.brand-text { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
-.brand-name { font-size: 14.5px; font-weight: 650; letter-spacing: -0.02em; color: var(--fg-strong); }
-.brand-env { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.brand-text { display: flex; flex-direction: column; gap: 2px; line-height: 1.25; min-width: 0; }
+.brand-name {
+  font-size: 14.5px; font-weight: 650; letter-spacing: -0.02em; color: var(--fg-strong);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.brand-env {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
 
 .nav-group { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
 .nav-label {

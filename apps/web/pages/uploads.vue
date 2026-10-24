@@ -117,9 +117,9 @@ function reset() {
 
 <template>
   <section>
-    <h1>Upload → parse → confirm grain</h1>
+    <PageHeader title="Upload → parse → confirm grain" />
 
-    <div class="card" v-if="step === 'pick' || step === 'uploading'">
+    <DcCard v-if="step === 'pick' || step === 'uploading'">
       <p class="muted">Step 1 — choose a CSV/XLSX ticket file. It is uploaded to quarantine, scanned, then parsed under resource limits. Raw bytes are retained per policy. Try <code>fixtures/support-tickets/data/tenant_alpha/tickets_cases.csv</code>.</p>
       <input type="file" accept=".csv,.xlsx" @change="onPick" />
       <div class="row" style="margin-top:0.6rem">
@@ -128,12 +128,14 @@ function reset() {
         </button>
         <span v-if="notice" class="muted">{{ notice }}</span>
       </div>
-    </div>
+    </DcCard>
 
-    <div v-if="error" class="card"><span class="badge err">{{ error }}</span></div>
+    <DcCard v-if="error"><span class="badge err">{{ error }}</span></DcCard>
 
-    <div v-if="preview" class="card">
-      <h2>Parse preview <span class="badge ok">{{ preview.detected.encoding }} · {{ preview.detected.delimiter === '\t' ? 'TAB' : preview.detected.delimiter }}</span></h2>
+    <DcCard v-if="preview" title="Parse preview">
+      <template #actions>
+        <span class="badge ok">{{ preview.detected.encoding }} · {{ preview.detected.delimiter === '\t' ? 'TAB' : preview.detected.delimiter }}</span>
+      </template>
       <p class="muted">Header row {{ preview.detected.header_row }} · {{ preview.row_count }} rows · dialect confidence: {{ preview.detected.dialect_confidence }} · dataset <code>{{ datasetId?.slice(0, 8) }}</code> revision {{ revision }} ({{ 'validated' }})</p>
       <table>
         <thead><tr><th>Column</th><th>Type</th><th>Null rate</th><th>Sample</th></tr></thead>
@@ -154,10 +156,9 @@ function reset() {
         <button :disabled="busy" @click="loadGrain">Continue to grain confirmation →</button>
         <button class="secondary" @click="reset">Start over</button>
       </div>
-    </div>
+    </DcCard>
 
-    <div v-if="step === 'grain'" class="card">
-      <h2>Confirm the business grain</h2>
+    <DcCard v-if="step === 'grain'" title="Confirm the business grain">
       <p class="muted">Uniqueness is checked over the <em>complete</em> candidate dataset, then you confirm business meaning. A unique row id is not a grain proof.</p>
       <table>
         <thead><tr><th></th><th>Candidate key</th><th>Unique (full data)</th><th>Null components</th><th>Duplicates</th></tr></thead>
@@ -176,10 +177,9 @@ function reset() {
         <NuxtLink class="btn" to="/datasets" v-if="grainConfirmed">Go publish →</NuxtLink>
       </div>
       <p v-if="grainConfirmed" class="badge ok" style="margin-top:0.6rem">Grain confirmed — dataset revision is publishable. Proceed to <NuxtLink to="/datasets">Datasets</NuxtLink> to publish, then <NuxtLink to="/metrics">Metrics</NuxtLink> to approve a definition.</p>
-    </div>
+    </DcCard>
 
-    <div class="card">
-      <h2>Upload history</h2>
+    <DcCard title="Upload history">
       <div v-if="!history.length" class="muted">No uploads yet.</div>
       <table v-else>
         <thead><tr><th>File</th><th>Status</th><th>Dataset</th><th>Created</th></tr></thead>
@@ -192,6 +192,6 @@ function reset() {
           </tr>
         </tbody>
       </table>
-    </div>
+    </DcCard>
   </section>
 </template>

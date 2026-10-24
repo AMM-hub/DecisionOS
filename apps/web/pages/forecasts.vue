@@ -189,17 +189,19 @@ function bestModel(comps: ForecastComparison[]): string | null {
 
 <template>
   <section>
-    <div class="row" style="justify-content: space-between">
-      <h1>Forecasting lab</h1>
-      <button class="secondary" :disabled="loading" @click="load">{{ loading ? 'Loading…' : 'Refresh' }}</button>
-    </div>
-    <p class="muted">Forecasts are refused when history is too thin. A complex model is only selected if it beats the naive baseline on a holdout — every result shows horizon, assumptions, evaluation, and limitations.</p>
+    <PageHeader
+      title="Forecasting lab"
+      subtitle="Forecasts are refused when history is too thin. A complex model is only selected if it beats the naive baseline on a holdout — every result shows horizon, assumptions, evaluation, and limitations."
+    >
+      <template #actions>
+        <button class="secondary" :disabled="loading" @click="load">{{ loading ? 'Loading…' : 'Refresh' }}</button>
+      </template>
+    </PageHeader>
 
-    <div v-if="error" class="card"><span class="badge err">{{ error }}</span></div>
+    <DcCard v-if="error"><span class="badge err">{{ error }}</span></DcCard>
 
     <!-- setup -->
-    <div class="card">
-      <h2>1 · Source &amp; horizon</h2>
+    <DcCard title="1 · Source &amp; horizon">
       <div class="grid cols-3">
         <label class="field">Dataset
           <select v-model="form.dataset_id">
@@ -239,13 +241,13 @@ function bestModel(comps: ForecastComparison[]): string | null {
         <button :disabled="!form.dataset_id || !form.metric_id || busy" @click="train">Train model</button>
       </div>
       <p v-if="selectedDef" class="muted">time basis: <code>{{ selectedDef.time_basis }}</code> ({{ selectedDef.timezone }}) · v{{ selectedDef.version }}</p>
-    </div>
+    </DcCard>
 
     <!-- suitability -->
-    <div v-if="suitability" class="card">
-      <h2>2 · Suitability
+    <DcCard v-if="suitability" title="2 · Suitability">
+      <template #actions>
         <span :class="['badge', suitability.sufficient ? 'ok' : 'warn']">{{ suitability.sufficient ? 'supported' : 'refused' }}</span>
-      </h2>
+      </template>
       <p v-if="!suitability.sufficient" class="muted">{{ suitability.reason }}
         <template v-if="suitability.missing_requirements?.length"> · missing: {{ suitability.missing_requirements.join(', ') }}</template>
       </p>
@@ -254,11 +256,10 @@ function bestModel(comps: ForecastComparison[]): string | null {
         <li v-for="a in suitability.recommended_actions" :key="a" class="muted">{{ a }}</li>
       </ul>
       <p v-for="w in suitability.warnings" :key="w"><span class="badge warn">{{ w }}</span></p>
-    </div>
+    </DcCard>
 
     <!-- evaluation -->
-    <div v-if="evaluation" class="card">
-      <h2>3 · Model comparison (holdout of {{ evaluation.holdout_size }} periods)</h2>
+    <DcCard v-if="evaluation" :title="`3 · Model comparison (holdout of ${evaluation.holdout_size} periods)`">
       <table>
         <thead><tr><th>Model</th><th>MASE ↓</th><th>MAPE %</th><th>RMSE</th><th></th></tr></thead>
         <tbody>
@@ -276,11 +277,13 @@ function bestModel(comps: ForecastComparison[]): string | null {
         </tbody>
       </table>
       <p class="muted">MASE &lt; 1 beats the seasonal naive scaling. A complex model is kept only if it clearly beats the baseline.</p>
-    </div>
+    </DcCard>
 
     <!-- trained -->
-    <div v-if="trained && trained.status === 'trained'" class="card">
-      <h2>4 · Trained model <span class="badge ok">{{ trained.model_name }}</span></h2>
+    <DcCard v-if="trained && trained.status === 'trained'" title="4 · Trained model">
+      <template #actions>
+        <span class="badge ok">{{ trained.model_name }}</span>
+      </template>
       <p class="muted">
         {{ trained.training_points }} periods through <code>{{ trained.training_end?.slice(0, 10) }}</code> ·
         horizon {{ trained.horizon }} · holdout MASE {{ fmt(trained.evaluation?.metrics.mase) }} ·
@@ -292,11 +295,13 @@ function bestModel(comps: ForecastComparison[]): string | null {
       <ul><li v-for="a in trained.assumptions" :key="a" class="muted">{{ a }}</li></ul>
       <h3>Limitations</h3>
       <ul><li v-for="l in trained.limitations" :key="l" class="muted">{{ l }}</li></ul>
-    </div>
+    </DcCard>
 
     <!-- prediction chart -->
-    <div v-if="prediction && prediction.status === 'answered'" class="card">
-      <h2>5 · Forecast <span class="badge">evidence <code>{{ prediction.evidence_ref }}</code></span></h2>
+    <DcCard v-if="prediction && prediction.status === 'answered'" title="5 · Forecast">
+      <template #actions>
+        <span class="badge">evidence <code>{{ prediction.evidence_ref }}</code></span>
+      </template>
       <canvas ref="canvas" style="width:100%;height:340px;display:block"></canvas>
       <p class="muted">solid = observed · dashed = forecast · shaded band = 95% prediction interval</p>
       <table>
@@ -307,10 +312,9 @@ function bestModel(comps: ForecastComparison[]): string | null {
           </tr>
         </tbody>
       </table>
-    </div>
-    <div v-else-if="trained && trained.status === 'trained'" class="card muted">
-      <h2>5 · Forecast</h2>
+    </DcCard>
+    <DcCard v-else-if="trained && trained.status === 'trained'" class="muted" title="5 · Forecast">
       Generate a forecast to see predictions with uncertainty bands.
-    </div>
+    </DcCard>
   </section>
 </template>

@@ -14,6 +14,12 @@ const busy = ref(false)
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 
+const openRaw = reactive<Record<string, boolean>>({})
+function toggleRaw(id: string, ev: Event) {
+  const el = ev.target as HTMLDetailsElement | null
+  openRaw[id] = !!el?.open
+}
+
 const OPS: PredicateOp[] = ['is_not_null', 'is_null', 'eq', 'not_in', 'in', 'lt', 'gte']
 
 // ---- propose form ---------------------------------------------------------
@@ -171,25 +177,77 @@ const insufficient = computed<MetricQueryInsufficient | null>(() =>
 function statusBadge(s: MetricDefinition['status']) {
   return s === 'approved' ? 'ok' : s === 'proposed' ? 'warn' : s === 'withdrawn' ? 'warn' : 'err'
 }
+
+// ---- definition rendering -------------------------------------------------
+const OP_LABELS: Record<string, string> = {
+  is_not_null: 'is not null',
+  is_null: 'is null',
+  eq: 'equals',
+  not_in: 'not in',
+  in: 'in',
+  lt: 'less than',
+  gte: 'at least',
+  between: 'between'
+}
+
+function opLabel(op: string): string {
+  return OP_LABELS[op] ?? op.replace(/_/g, ' ')
+}
+
+function predicateHasValue(p: Predicate): boolean {
+  return p.value !== undefined && p.value !== null
+}
+
+function predicateValue(p: Predicate): string {
+  if (Array.isArray(p.value)) return p.value.map(v => String(v)).join(', ')
+  return p.value == null ? '' : String(p.value)
+}
+
+function predicateText(p: Predicate): string {
+  const base = `${p.field} ${opLabel(p.op)}`
+  return predicateHasValue(p) ? `${base} ${predicateValue(p)}` : base
+}
+
+function predicatePhrase(preds: Predicate[]): string {
+  return preds.length ? preds.map(predicateText).join(' and ') : 'all rows'
+}
+
+function expressionLines(expr: MetricDefinition['expression']): string[] {
+  if (expr.kind === 'ratio') {
+    return [
+      `numerator: count where ${predicatePhrase(expr.numerator_predicates)}`,
+      `denominator: count where ${predicatePhrase(expr.denominator_predicates)}`
+    ]
+  }
+  if (expr.kind === 'count') {
+    return [`count where ${predicatePhrase(expr.predicates)}`]
+  }
+  const quantile = Math.round(expr.quantile * 100)
+  return [`p${quantile} ${expr.unit} between ${expr.start_field} and ${expr.end_field}`]
+}
+
+function rawDefinition(m: MetricDefinition): string {
+  return JSON.stringify({ eligibility: m.eligibility, expression: m.expression }, null, 2)
+}
 </script>
 
 <template>
   <section>
-    <div class="row" style="justify-content: space-between">
-      <h1>Metric definitions</h1>
-      <div class="row">
+    <PageHeader
+      title="Metric definitions"
+      subtitle="Certified metrics require an approved definition version. Ratios aggregate numerator and denominator before division. Propose as a modeler, approve as a manager."
+    >
+      <template #actions>
         <button class="secondary" :disabled="loading" @click="load">{{ loading ? 'Loading…' : 'Refresh' }}</button>
         <button @click="form.open = !form.open">{{ form.open ? 'Close' : 'Propose metric' }}</button>
-      </div>
-    </div>
-    <p class="muted">Certified metrics require an approved definition version. Ratios aggregate numerator and denominator before division. Propose as a modeler, approve as a manager.</p>
+      </template>
+    </PageHeader>
 
-    <div v-if="error" class="card"><span class="badge err">{{ error }}</span></div>
-    <div v-if="notice" class="card"><span class="badge ok">{{ notice }}</span></div>
+    <DcCard v-if="error"><span class="badge err">{{ error }}</span></DcCard>
+    <DcCard v-if="notice"><span class="badge ok">{{ notice }}</span></DcCard>
 
     <!-- propose -->
-    <div v-if="form.open" class="card">
-      <h2>Propose a definition</h2>
+    <DcCard v-if="form.open" title="Propose a definition">
       <div class="grid cols-3">
         <label class="field">Metric ID<code>*</code>
           <input v-model="form.metric_id" placeholder="metric-first-response-rate" />
@@ -257,27 +315,52 @@ function statusBadge(s: MetricDefinition['status']) {
         <button :disabled="!form.metric_id || !form.name || !form.dataset_id || !form.time_basis || busy" @click="propose">Submit proposal</button>
         <button class="secondary" @click="form.open = false">Cancel</button>
       </div>
-    </div>
+    </DcCard>
 
     <!-- list -->
-    <div v-if="!defs.length && !loading" class="card muted">No definitions yet. Propose one to begin.</div>
-    <div v-for="m in defs" :key="m.metric_id + '@' + m.version" class="card">
-      <div class="row" style="justify-content: space-between">
-        <h2 style="margin:0">{{ m.name }}
-          <span :class="['badge', statusBadge(m.status)]">{{ m.status }} v{{ m.version }}</span>
-        </h2>
-        <div class="row">
-          <button v-if="m.status === 'proposed' || m.status === 'withdrawn'" :disabled="busy" @click="approve(m)">{{ m.status === 'withdrawn' ? 'Re-approve' : 'Approve' }}</button>
-          <button v-if="m.status === 'approved'" class="secondary" :disabled="busy" @click="withdraw(m)">Withdraw</button>
-        </div>
+    <DcCard v-if="!defs.length && !loading">
+      <div class="muted">No definitions yet. Propose one to begin.</div>
+    </DcCard>
+    <DcCard v-for="m in defs" :key="m.metric_id + '@' + m.version" :title="m.name">
+      <template #actions>
+        <span :class="['badge', statusBadge(m.status)]">{{ m.status }} v{{ m.version }}</span>
+        <button v-if="m.status === 'proposed' || m.status === 'withdrawn'" :disabled="busy" @click="approve(m)">{{ m.status === 'withdrawn' ? 'Re-approve' : 'Approve' }}</button>
+        <button v-if="m.status === 'approved'" class="secondary" :disabled="busy" @click="withdraw(m)">Withdraw</button>
+      </template>
+      <div class="def-meta">
+        <span class="chip" data-tone="accent">{{ m.kind }}</span>
+        <span class="chip plain mono">{{ m.dataset_id.slice(0, 8) }}</span>
+        <span class="chip plain">{{ m.time_basis }} · {{ m.timezone }}</span>
+        <span class="def-id mono">{{ m.metric_id }}</span>
       </div>
-      <p class="muted"><code>{{ m.metric_id }}</code> · {{ m.kind }} · dataset <code>{{ m.dataset_id.slice(0, 8) }}</code> · time basis: {{ m.time_basis }} ({{ m.timezone }})</p>
-      <p class="muted">eligibility: {{ m.eligibility.length ? JSON.stringify(m.eligibility) : '(all)' }} · expression: <code>{{ JSON.stringify(m.expression) }}</code></p>
-    </div>
+
+      <div class="def-grid">
+        <section class="def-sect">
+          <h4 class="def-k">Eligibility</h4>
+          <div v-if="m.eligibility.length" class="rule-list">
+            <div v-for="(p, i) in m.eligibility" :key="i" class="rule-row">
+              <span class="chip plain mono">{{ p.field }}</span>
+              <span class="rule-op">{{ opLabel(p.op) }}</span>
+              <span v-if="predicateHasValue(p)" class="chip mono">{{ predicateValue(p) }}</span>
+            </div>
+          </div>
+          <p v-else class="muted def-line">All rows eligible</p>
+        </section>
+
+        <section class="def-sect">
+          <h4 class="def-k">Expression</h4>
+          <p v-for="(line, i) in expressionLines(m.expression)" :key="i" class="def-line">{{ line }}</p>
+        </section>
+      </div>
+
+      <details class="raw-def" @toggle="toggleRaw(m.metric_id, $event)">
+        <summary>Raw definition</summary>
+        <pre v-if="openRaw[m.metric_id]" class="mono">{{ rawDefinition(m) }}</pre>
+      </details>
+    </DcCard>
 
     <!-- query -->
-    <div class="card">
-      <h2>Query a certified metric</h2>
+    <DcCard title="Query a certified metric">
       <div class="grid cols-3">
         <label class="field">Metric
           <select v-model="q.metric_id">
@@ -288,14 +371,25 @@ function statusBadge(s: MetricDefinition['status']) {
         <label class="field">Window start<input v-model="q.start" type="datetime-local" /></label>
         <label class="field">Window end<input v-model="q.end" type="datetime-local" /></label>
         <label class="field">Timezone<input v-model="q.timezone" /></label>
-        <label class="field">Dimensions
+        <label v-if="qFields.length" class="field">Dimensions
           <select v-model="q.dimensions" multiple size="3">
             <option v-for="f in qFields" :key="f" :value="f">{{ f }}</option>
           </select>
         </label>
+        <div v-else class="fld">
+          <span class="muted">Dimensions</span>
+          <span class="muted dims-hint">No dimensions available for this dataset</span>
+        </div>
         <label class="field">Limit<input v-model="q.limit" type="number" min="1" max="500" /></label>
       </div>
-      <button :disabled="!q.metric_id || busy" @click="runQuery" style="margin-top:0.5rem">Run query</button>
+      <div class="row" style="margin-top:0.5rem">
+        <button
+          :disabled="!q.metric_id || busy"
+          :title="q.metric_id ? undefined : 'Select a certified metric to run a query'"
+          @click="runQuery"
+        >Run query</button>
+        <span v-if="!q.metric_id" class="muted">Select a certified metric to run a query</span>
+      </div>
 
       <div v-if="answered" style="margin-top:0.8rem">
         <h3>Result <span class="badge ok">answered</span></h3>
@@ -311,6 +405,33 @@ function statusBadge(s: MetricDefinition['status']) {
         <h3>Refused <span class="badge warn">{{ insufficient.reason_code }}</span></h3>
         <p class="muted">Missing: {{ insufficient.missing_requirements.join(', ') }} · next actions: {{ insufficient.next_actions.join(', ') }}</p>
       </div>
-    </div>
+    </DcCard>
   </section>
 </template>
+
+<style scoped>
+.def-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.def-id { margin-inline-start: auto; font-size: 12px; color: var(--muted); }
+.def-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.def-sect { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.def-k {
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--faint);
+}
+.def-line { font-size: 12.5px; color: var(--fg); line-height: 1.45; }
+.rule-list { display: flex; flex-direction: column; gap: 5px; }
+.rule-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.rule-op { font-size: 12px; color: var(--muted); }
+.raw-def { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.raw-def summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+.raw-def pre {
+  margin: 8px 0 0; padding: 10px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r);
+  font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+}
+.dims-hint { font-size: 12px; }
+@media (max-width: 720px) {
+  .def-grid { grid-template-columns: 1fr; }
+  .def-id { margin-inline-start: 0; }
+}
+</style>

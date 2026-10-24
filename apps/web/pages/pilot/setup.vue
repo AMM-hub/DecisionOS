@@ -74,34 +74,38 @@ onMounted(() => {
 
 <template>
   <div class="pilot-setup-page">
-    <h2>{{ t('pilotSetup.title', locale) }}</h2>
-    <p class="muted">{{ t('pilotSetup.description', locale) }}</p>
+    <PageHeader
+      :title="t('pilotSetup.title', locale)"
+      :subtitle="t('pilotSetup.description', locale)"
+    />
 
     <!-- Step Progress Indicator -->
-    <div class="card steps-bar margin-v">
-      <div class="step" :class="{ active: activeStep === 1, done: activeStep > 1 }">
-        {{ t('pilotSetup.contractStep', locale) }}
+    <DcCard class="margin-v">
+      <div class="steps-bar">
+        <div class="step" :class="{ active: activeStep === 1, done: activeStep > 1 }">
+          {{ t('pilotSetup.contractStep', locale) }}
+        </div>
+        <div class="step" :class="{ active: activeStep === 2, done: activeStep > 2 }">
+          {{ t('pilotSetup.dataStep', locale) }}
+        </div>
+        <div class="step" :class="{ active: activeStep === 3, done: activeStep > 3 }">
+          {{ t('pilotSetup.semanticStep', locale) }}
+        </div>
+        <div class="step" :class="{ active: activeStep === 4, done: activeStep > 4 }">
+          {{ t('pilotSetup.monitoringStep', locale) }}
+        </div>
+        <div class="step" :class="{ active: activeStep === 5, done: bootstrapDone }">
+          {{ t('pilotSetup.summaryStep', locale) }}
+        </div>
       </div>
-      <div class="step" :class="{ active: activeStep === 2, done: activeStep > 2 }">
-        {{ t('pilotSetup.dataStep', locale) }}
-      </div>
-      <div class="step" :class="{ active: activeStep === 3, done: activeStep > 3 }">
-        {{ t('pilotSetup.semanticStep', locale) }}
-      </div>
-      <div class="step" :class="{ active: activeStep === 4, done: activeStep > 4 }">
-        {{ t('pilotSetup.monitoringStep', locale) }}
-      </div>
-      <div class="step" :class="{ active: activeStep === 5, done: bootstrapDone }">
-        {{ t('pilotSetup.summaryStep', locale) }}
-      </div>
-    </div>
+    </DcCard>
 
     <!-- Main Wizard Card -->
-    <div v-if="loading" class="card muted">
+    <DcCard v-if="loading" class="muted">
       {{ t('common.loading', locale) }}
-    </div>
+    </DcCard>
 
-    <div v-else class="card">
+    <DcCard v-else>
       <div v-if="!bootstrapDone" class="setup-form">
         <h3>Step {{ activeStep }}: Pilot Configuration</h3>
 
@@ -157,7 +161,7 @@ onMounted(() => {
         <p><strong>Security Gate:</strong> <span class="badge warn">INTERNAL EVALUATION ONLY</span></p>
 
         <!-- Data Validation Result -->
-        <div v-if="validationRes" class="margin-v card" :class="validationRes.status === 'PASS' ? 'ok-border' : 'warn-border'">
+        <DcCard v-if="validationRes" class="margin-v" :class="validationRes.status === 'PASS' ? 'ok-border' : 'warn-border'">
           <h4>Data Readiness Quality Gate</h4>
           <p><strong>Status:</strong> <span class="badge" :class="validationRes.status === 'PASS' ? 'ok' : 'warn'">{{ validationRes.status }}</span></p>
 
@@ -167,7 +171,7 @@ onMounted(() => {
               <li v-for="(w, idx) in validationRes.warnings" :key="idx">{{ w }}</li>
             </ul>
           </div>
-        </div>
+        </DcCard>
 
         <div class="row margin-v">
           <NuxtLink to="/pilot" class="button primary">
@@ -175,7 +179,7 @@ onMounted(() => {
           </NuxtLink>
         </div>
       </div>
-    </div>
+    </DcCard>
   </div>
 </template>
 

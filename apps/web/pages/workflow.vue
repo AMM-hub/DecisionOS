@@ -115,16 +115,19 @@ function pct(n: number): string {
 
 <template>
   <section>
-    <div class="row" style="justify-content: space-between">
-      <h1>Workflow Analytics</h1>
-      <button class="secondary" :disabled="loading" @click="loadDatasets">{{ loading ? 'Loading…' : 'Refresh datasets' }}</button>
-    </div>
-    <p class="muted">Process intelligence over event-history datasets — bottleneck detection, variant analysis, conformance checking, case SLA metrics, and throughput times (§15).</p>
+    <PageHeader
+      title="Workflow Analytics"
+      subtitle="Process intelligence over event-history datasets — bottleneck detection, variant analysis, conformance checking, case SLA metrics, and throughput times (§15)."
+    >
+      <template #actions>
+        <button class="secondary" :disabled="loading" @click="loadDatasets">{{ loading ? 'Loading…' : 'Refresh datasets' }}</button>
+      </template>
+    </PageHeader>
 
-    <div v-if="error" class="card"><span class="badge err">{{ error }}</span></div>
+    <DcCard v-if="error"><span class="badge err">{{ error }}</span></DcCard>
 
     <!-- Dataset & column mapping -->
-    <div class="card">
+    <DcCard>
       <label class="field">
         Dataset
         <select v-model="form.dataset_id">
@@ -160,7 +163,7 @@ function pct(n: number): string {
           <input v-model="form.attributes" placeholder="agent_id, priority" />
         </label>
       </div>
-    </div>
+    </DcCard>
 
     <!-- Tabs -->
     <nav class="tabs" aria-label="Analysis tabs">
@@ -176,8 +179,10 @@ function pct(n: number): string {
     </button>
 
     <!-- Tab content -->
-    <div v-if="tab === 'bottlenecks' && bottlenecks" class="card">
-      <h2>Bottlenecks <span class="badge">{{ bottlenecks.bottlenecks.length }} stages</span></h2>
+    <DcCard v-if="tab === 'bottlenecks' && bottlenecks" title="Bottlenecks">
+      <template #actions>
+        <span class="badge">{{ bottlenecks.bottlenecks.length }} stages</span>
+      </template>
       <p class="muted">Sorted by longest median duration first. Last events of each case have no exit timestamp → excluded from duration stats.</p>
       <table>
         <thead>
@@ -194,10 +199,12 @@ function pct(n: number): string {
         </tbody>
       </table>
       <p class="muted">Revision {{ bottlenecks.revision }} · evidence: <code>{{ bottlenecks.evidence_ref.slice(0, 12) }}…</code></p>
-    </div>
+    </DcCard>
 
-    <div v-if="tab === 'variants' && variants" class="card">
-      <h2>Process Variants <span class="badge">{{ variants.total_variants }} variants</span></h2>
+    <DcCard v-if="tab === 'variants' && variants" title="Process Variants">
+      <template #actions>
+        <span class="badge">{{ variants.total_variants }} variants</span>
+      </template>
       <p class="muted">Showing top {{ form.top }} variants of {{ variants.total_variants }} across {{ variants.total_cases }} cases.</p>
       <table>
         <thead>
@@ -213,14 +220,25 @@ function pct(n: number): string {
         </tbody>
       </table>
       <p v-if="variants.variants.length < variants.total_variants" class="muted">+ {{ variants.total_variants - variants.variants.length }} more variants</p>
-    </div>
+    </DcCard>
 
-    <div v-if="tab === 'conformance' && conformance" class="card">
-      <h2>Conformance</h2>
+    <DcCard v-if="tab === 'conformance' && conformance" title="Conformance">
       <div class="grid cols-3">
-        <div class="stat"><div class="n">{{ pct(conformance.fitness) }}</div><span class="muted">Fitness</span></div>
-        <div class="stat"><div class="n">{{ pct(conformance.precision) }}</div><span class="muted">Precision</span></div>
-        <div class="stat"><div class="n">{{ conformance.violated_cases }} / {{ conformance.total_cases }}</div><span class="muted">Violated cases</span></div>
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Fitness</div>
+          <div class="k-val">{{ pct(conformance.fitness) }}</div>
+          <div class="k-foot">of observed traces</div>
+        </div>
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Precision</div>
+          <div class="k-val">{{ pct(conformance.precision) }}</div>
+          <div class="k-foot">behavioural precision</div>
+        </div>
+        <div class="kpi">
+          <div class="k-label"><span class="mark" />Violated cases</div>
+          <div class="k-val">{{ conformance.violated_cases }} / {{ conformance.total_cases }}</div>
+          <div class="k-foot">cases off-path</div>
+        </div>
       </div>
       <div v-if="conformance.example_violations.length" style="margin-top:0.5rem">
         <h3>Example violations</h3>
@@ -246,10 +264,14 @@ function pct(n: number): string {
           <textarea v-model="rulesText" rows="10" style="font-family: monospace; font-size: 0.85rem" />
         </label>
       </div>
-    </div>
+    </DcCard>
 
-    <div v-if="tab === 'cases' && caseMetrics" class="card">
-      <h2>Case SLA Metrics <span class="badge ok">{{ caseMetrics.summary.met }} met</span> <span class="badge warn">{{ caseMetrics.summary.in_progress }} in progress</span> <span class="badge err">{{ caseMetrics.summary.breached }} breached</span></h2>
+    <DcCard v-if="tab === 'cases' && caseMetrics" title="Case SLA Metrics">
+      <template #actions>
+        <span class="badge ok">{{ caseMetrics.summary.met }} met</span>
+        <span class="badge warn">{{ caseMetrics.summary.in_progress }} in progress</span>
+        <span class="badge err">{{ caseMetrics.summary.breached }} breached</span>
+      </template>
       <p class="muted">{{ caseMetrics.summary.total_cases }} cases · SLA threshold: {{ caseMetrics.sla_hours }}h · as of {{ caseMetrics.as_of }}</p>
       <table>
         <thead>
@@ -268,10 +290,12 @@ function pct(n: number): string {
           </tr>
         </tbody>
       </table>
-    </div>
+    </DcCard>
 
-    <div v-if="tab === 'throughput' && throughput" class="card">
-      <h2>Throughput <span class="badge">{{ throughput.stages.length }} stages</span></h2>
+    <DcCard v-if="tab === 'throughput' && throughput" title="Throughput">
+      <template #actions>
+        <span class="badge">{{ throughput.stages.length }} stages</span>
+      </template>
       <p class="muted">Time-in-stage (in {{ throughput.unit }}). Final event of each case excluded from time stats.</p>
       <table>
         <thead>
@@ -290,7 +314,7 @@ function pct(n: number): string {
           </tr>
         </tbody>
       </table>
-    </div>
+    </DcCard>
   </section>
 </template>
 
@@ -303,6 +327,4 @@ function pct(n: number): string {
 .tabs button.active { color: #0f766e; font-weight: 600; border-bottom-color: #0f766e; }
 textarea { width: 100%; box-sizing: border-box; }
 .highlight { background: #f0fdfa; }
-.stat { text-align: center; }
-.stat .n { font-size: 1.8rem; font-weight: 700; }
 </style>

@@ -114,6 +114,12 @@ const PROBE = `(() => {
     const t = el.innerText;
     if (t) txt = txt.split(t).join(' ');
   }
+  // Legitimate prose must not trip the null check: predicate labels read
+  // "first_response_at is not null", which is a rule description, not a bug.
+  txt = txt.replace(/is not null/gi, ' ').replace(/is null/gi, ' ')
+           .replace(/not null/gi, ' ').replace(/is_not_null/gi, ' ')
+           .replace(/is_null/gi, ' ');
+
   // Whole-token matching: letters, digits and underscore are token characters.
   const badPatterns = [
     ['undefined', /(?<![A-Za-z0-9_])undefined(?![A-Za-z0-9_])/],
@@ -125,6 +131,17 @@ const PROBE = `(() => {
   ];
   for (const [label, re] of badPatterns) {
     if (re.test(txt)) out.badValues.push(label);
+  }
+
+  // Untranslated i18n keys leaking into rendered chrome.
+  const rawText = document.body.innerText || '';
+  out.rawKeys = [];
+  for (const [label, re] of [
+    ['common', /\\bcommon\\.[a-zA-Z]/],
+    ['nav', /\\bnav\\.[a-zA-Z]/],
+    ['NAV', /NAV\\.[A-Z]/],
+  ]) {
+    if (re.test(rawText)) out.rawKeys.push(label);
   }
 
   for (const img of document.querySelectorAll('img')) {
@@ -193,6 +210,11 @@ async function run() {
   for (const locale of LOCALES) {
     for (const [vw, vh] of VIEWPORTS) {
       await cdp.send('Emulation.setDeviceMetricsOverride', { width: vw, height: vh, deviceScaleFactor: 1, mobile: false });
+      // Seed the locale before app boot without an extra full page load (which
+      // would double API traffic and trip the API's 120 req/min token bucket).
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `try { localStorage.setItem('decisionos_locale','${locale}'); } catch (e) {}`
+      });
 
       for (const [name, path] of ROUTES) {
         cdp.clear();
@@ -211,11 +233,6 @@ async function run() {
         cdp.on('Network.loadingFailed', (p) => {
           if (!String(p.errorText || '').includes('ERR_ABORTED')) failedReqs.push(`${p.errorText} ${p.blockedReason || ''}`.trim());
         });
-
-        // seed locale before app boots
-        await cdp.send('Page.navigate', { url: `${WEB_BASE_URL}/` });
-        await sleep(400);
-        await cdp.send('Runtime.evaluate', { expression: `localStorage.setItem('decisionos_locale','${locale}')` });
 
         loaded = false;
         const url = `${WEB_BASE_URL}${path}`;
@@ -245,6 +262,7 @@ async function run() {
         if (probe?.probeError) find(rec, 'probe-error', probe.probeError);
         if (probe?.hScroll > 0) find(rec, 'document-hscroll', `${probe.hScroll}px`);
         for (const v of probe?.badValues || []) find(rec, 'bad-value', v);
+        for (const k of probe?.rawKeys || []) find(rec, 'rawkeys', k);
         for (const src of probe?.brokenImages || []) find(rec, 'broken-image', src || '(no src)');
         if (typeof probe?.textLen === 'number' && probe.textLen < 60) find(rec, 'near-empty', `${probe.textLen} chars`);
 
@@ -255,6 +273,7 @@ async function run() {
         if (probe?.overflowCount) flags.push(`${probe.overflowCount} overflow`);
         if (probe?.clipped?.length) flags.push(`${probe.clipped.length} clipped`);
         if (probe?.badValues?.length) flags.push(`bad:${probe.badValues.join(',')}`);
+        if (probe?.rawKeys?.length) flags.push('rawkeys');
         if (probe?.brokenImages?.length) flags.push('brokenImg');
         if (probe?.textLen < 60) flags.push('near-empty');
         console.log(`${locale} ${vw}x${vh} ${path.padEnd(18)} ${flags.length ? '⚠ ' + flags.join(' | ') : 'ok'}`);
