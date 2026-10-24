@@ -86,5 +86,27 @@ Exit criteria for "deployable": `docker compose up` green on a clean machine, CI
 health endpoint tells the truth, a schema change ships as a migration, and a human can log in.
 
 ## Log
-- 2026-10-24: round executed, all green except the items above. Probe bug (`GET /v1/evidence` 405)
-  fixed in `scripts/live_api_probe2.py` — it was my harness assumption, not an API defect.
+
+**2026-10-24 — round executed.** All code-level checks green; the gaps are delivery-level.
+
+**R7 CLOSED — containers run.** `docker compose build` + `up -d` succeeded (Docker Desktop started).
+Proof: api container `/v1/health` 200 in 21 ms, anonymous `/v1/decisions` 401, authenticated 200;
+web container `/` and `/risk` 200; **full 52-config UI sweep re-run against the containerised stack,
+0 console errors / 0 exceptions / 0 bad values**. Local dev servers were stopped first to free
+:8100/:3000 — the stack is currently served by containers.
+
+**R8 CLOSED — CI is real and green.** `main` was 55 commits ahead of `origin`; pushed (fast-forward).
+First run **failed**, which was the point of doing it:
+- `simulation.py` / `optimization.py` import `simpy`, `pulp`, `pm4py` — **none were declared** in
+  `pyproject.toml`. A clean install could not even collect tests. The dev venv had them by accident.
+- `pulp` had also drifted to 4.x in the clean environment, which removed the `LpStatus*` constants the
+  solver module uses. Pinned `pulp>=2.9,<4`.
+Verified in a clean `python:3.12-slim` container: 395 passed, coverage 90.05%. Pushed as `67c7e60`;
+**CI run 67c7e60 = success (backend + frontend)**.
+
+**NEW RISK (P9) — licensing.** `pm4py` is **AGPL v3**: the banner states commercial use requires
+open-sourcing the application or buying a commercial licence. The process-mining endpoints depend on it.
+If DecisionOS is to be sold or hosted commercially, this must be resolved (licence purchase or replace
+with a permissive implementation). Flagged now, not at contract-signing time.
+
+Remaining open: **R9** (ops hardening), **R10** (migrations), **R11** (E2E in CI), **R12** (identity + seed).
