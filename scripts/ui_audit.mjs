@@ -57,6 +57,7 @@ const ROUTES = [
   ['scenarios', '/scenarios'],
   ['datasets', '/datasets'],
   ['metrics', '/metrics'],
+  ['studio', '/studio'],
   ['uploads', '/uploads'],
 ];
 const VIEWPORTS = [[1920, 1080], [1366, 768]];

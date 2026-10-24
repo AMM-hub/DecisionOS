@@ -47,6 +47,7 @@ const routeTitle = computed(() => {
   if (p === '/scenarios') return t('nav.scenarios', locale.value)
   if (p === '/datasets') return t('nav.datasets', locale.value)
   if (p === '/metrics') return t('nav.metrics', locale.value)
+  if (p === '/studio') return t('nav.studio', locale.value)
   if (p === '/uploads') return t('nav.uploads', locale.value)
   if (p === '/pilot/setup') return t('nav.pilot', locale.value)
   return t('nav.home', locale.value)
@@ -155,6 +156,10 @@ function closeMobileNav() {
             <NuxtLink to="/metrics" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-database"/></svg>
               <span>{{ t('nav.metrics', locale) }}</span>
+            </NuxtLink>
+            <NuxtLink to="/studio" class="nav-item" @click="closeMobileNav">
+              <svg class="ico"><use href="#i-trend"/></svg>
+              <span>{{ t('nav.studio', locale) }}</span>
             </NuxtLink>
             <NuxtLink to="/uploads" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-upload"/></svg>

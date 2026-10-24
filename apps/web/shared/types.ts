@@ -817,3 +817,66 @@ export interface DecisionRecord {
   updated_at: string
   evidence_bindings?: DecisionEvidenceBinding[]
 }
+
+// ---- analytics studio (P1b) -----------------------------------------------
+export type AnalyticsAggregation = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'count_distinct'
+
+export type AnalyticsFilterOperator =
+  | 'eq' | 'neq' | 'in' | 'not_in' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_null' | 'is_not_null'
+
+export interface AnalyticsMeasure {
+  column: string
+  agg: AnalyticsAggregation
+  alias?: string | null
+}
+
+export interface AnalyticsFilter {
+  column: string
+  op: AnalyticsFilterOperator
+  value?: unknown
+}
+
+export interface AnalyticsQuery {
+  dataset_id: string
+  revision?: number | null
+  dimensions: string[]
+  measures: AnalyticsMeasure[]
+  filters: AnalyticsFilter[]
+  time_column?: string | null
+  time_from?: string | null
+  time_to?: string | null
+  limit?: number
+  order_by?: string | null
+  order_dir?: 'asc' | 'desc'
+}
+
+export interface AnalyticsColumn {
+  name: string
+  type: string
+}
+
+export interface AnalyticsQueryResponse {
+  dataset_id: string
+  revision: number
+  columns: AnalyticsColumn[]
+  rows: Array<Array<string | number | boolean | null>>
+  row_count: number
+  truncated: boolean
+  evidence_ref: string
+  executed_at: string
+  took_ms: number
+}
+
+export interface AnalysisArtifact {
+  id: string
+  name: string
+  dataset_id: string
+  revision: number
+  query: AnalyticsQuery
+  result_digest: string | null
+  row_count: number
+  created_by: string
+  created_at: string
+  updated_at: string
+  last_result?: AnalyticsQueryResponse | null
+}

@@ -399,6 +399,22 @@ CREATE TABLE IF NOT EXISTS pilot (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
+
+CREATE TABLE IF NOT EXISTS analysis_artifact (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  dataset_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  query_json TEXT NOT NULL,
+  result_digest TEXT,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  UNIQUE (tenant_id, name)
+);
 """
 
 SCHEMA_VERSION_DDL = """
@@ -585,10 +601,33 @@ def _migration_003_evidence_definition_version_nullable(conn: sqlite3.Connection
         raise RuntimeError(f"migration 3 left foreign-key violations: {violations!r}")
 
 
+def _migration_004_analysis_artifact(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS analysis_artifact (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          dataset_id TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          query_json TEXT NOT NULL,
+          result_digest TEXT,
+          row_count INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id),
+          UNIQUE (tenant_id, name)
+        )
+        """
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "initial_schema", _migration_001_initial_schema),
     (2, "decision_tenant_unique", _migration_002_decision_tenant_unique),
     (3, "evidence_definition_version_nullable", _migration_003_evidence_definition_version_nullable),
+    (4, "analysis_artifact", _migration_004_analysis_artifact),
 ]
 
 

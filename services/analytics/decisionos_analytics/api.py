@@ -32,6 +32,16 @@ def page_params(
 
 
 from . import operations
+from .analytics.query import AnalyticsQuery, AnalyticsQueryError, run_query
+from .artifacts import (
+    ArtifactError,
+    create_artifact,
+    delete_artifact,
+    get_artifact,
+    list_artifacts,
+    rerun_artifact,
+    update_artifact,
+)
 from .execution import compile_plan, execute
 from .forecasting import (
     ForecastRefused,
@@ -955,6 +965,89 @@ def create_app(data_dir: Path) -> FastAPI:
         ).fetchall()
         response.headers["X-Total-Count"] = str(total)
         return [dict(r) for r in rows]
+
+    # ---- analytics studio (P1b) ------------------------------------------
+    @app.post("/v1/analytics/query")
+    async def analytics_query(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user)
+        query = AnalyticsQuery.model_validate(await request.json())
+        try:
+            result = run_query(store, objects, tenant, user, query)
+        except AnalyticsQueryError as e:
+            return api_error(e.status, e.code, e.detail)
+        return result.as_dict()
+
+    @app.post("/v1/analytics/analyses", status_code=201)
+    async def create_analysis_api(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        body = await request.json()
+        name = body.get("name")
+        if not isinstance(name, str):
+            return api_error(422, "missing_field", "Field 'name' is required.")
+        if not isinstance(body.get("query"), dict):
+            return api_error(422, "missing_field", "Field 'query' is required.")
+        query = AnalyticsQuery.model_validate(body["query"])
+        try:
+            return create_artifact(store, objects, tenant, user, name, query, bool(body.get("run_now", False)))
+        except ArtifactError as e:
+            return api_error(e.status, e.code, e.detail)
+
+    @app.get("/v1/analytics/analyses")
+    async def list_analyses_api(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        q: str | None = Query(default=None, description="Case-insensitive analysis name substring filter"),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
+        total, items = list_artifacts(store, tenant, limit, offset, q)
+        response.headers["X-Total-Count"] = str(total)
+        return items
+
+    @app.get("/v1/analytics/analyses/{artifact_id}")
+    async def get_analysis_api(
+        artifact_id: str,
+        run: bool = Query(default=False, description="Re-execute the stored query"),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user)
+        try:
+            return rerun_artifact(store, objects, tenant, user, artifact_id) if run else get_artifact(store, tenant, artifact_id)
+        except ArtifactError as e:
+            return api_error(e.status, e.code, e.detail)
+
+    @app.put("/v1/analytics/analyses/{artifact_id}")
+    async def update_analysis_api(
+        artifact_id: str,
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        body = await request.json()
+        name = body.get("name") if "name" in body else None
+        if name is not None and not isinstance(name, str):
+            return api_error(422, "invalid_value", "Field 'name' must be a string.")
+        query = AnalyticsQuery.model_validate(body["query"]) if "query" in body else None
+        try:
+            return update_artifact(store, objects, tenant, user, artifact_id, name, query, bool(body.get("run_now", False)))
+        except ArtifactError as e:
+            return api_error(e.status, e.code, e.detail)
+
+    @app.delete("/v1/analytics/analyses/{artifact_id}")
+    async def delete_analysis_api(artifact_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        try:
+            artifact = get_artifact(store, tenant, artifact_id)
+            if artifact["created_by"] != user and role_of(user) != "ops_manager":
+                return api_error(403, "forbidden", "Only the owner or an ops manager may delete this analysis.")
+            delete_artifact(store, tenant, user, artifact_id)
+        except ArtifactError as e:
+            return api_error(e.status, e.code, e.detail)
+        return {"status": "deleted", "id": artifact_id}
 
     # ---- scenario & optimisation (M4, spec §17) ---------------------------
     @app.get("/v1/scenarios/templates")
