@@ -7,7 +7,11 @@ services:
     ports:
       - "8100:8100"
     volumes:
-      - ./var:/app/var
+      # Named volume (not a bind mount): the container runs as the unprivileged
+      # `worker` user, and a host bind mount owned by the CI runner cannot be
+      # written to, which made the stack fail to become ready. Override with
+      # ./var:/app/var locally if you want to inspect the SQLite file directly.
+      - api-data:/app/var
     env_file:
       - path: .env
         required: false
@@ -47,3 +51,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+volumes:
+  api-data:

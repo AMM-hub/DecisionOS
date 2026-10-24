@@ -3,7 +3,9 @@ WORKDIR /srv
 COPY pyproject.toml ./
 COPY decisionos_analytics ./decisionos_analytics
 RUN pip install --no-cache-dir .
-RUN useradd -r worker && mkdir -p /var/lib/decisionos && chown worker /var/lib/decisionos
+RUN useradd -r worker \
+ && mkdir -p /var/lib/decisionos /app/var/worker \
+ && chown -R worker /var/lib/decisionos /app/var
 USER worker
 EXPOSE 8100
 CMD ["uvicorn", "decisionos_analytics.serve:app", "--host", "0.0.0.0", "--port", "8100"]
