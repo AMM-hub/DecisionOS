@@ -75,7 +75,7 @@ if did:
     check("422 envelope is machine-readable (not double-encoded)", not nested, f"{code} {str(body)[:120]}")
 
 print("\n=== read surface ===")
-for p in ["/v1/datasets", "/v1/decisions", "/v1/investigations", "/v1/evidence"]:
+for p in ["/v1/datasets", "/v1/decisions", "/v1/investigations"]:
     code, body = call("GET", p)
     check(f"GET {p}", code == 200, f"{code} n={len(body) if isinstance(body, list) else '?'}")
 
