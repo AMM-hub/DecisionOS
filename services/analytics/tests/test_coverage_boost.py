@@ -69,6 +69,8 @@ def test_evidence_storage_and_canonical_digest(test_env):
     )
     assert res["storage_format"] == "json"
     assert res["canonical_digest"] is not None
+    assert res["definition_version"] is None
+    assert "definition_version_unknown" in res["quality_flags"]
 
     # Retrieve evidence
     ev = get_evidence(store, objects, tenant_id, res["artifact_id"])

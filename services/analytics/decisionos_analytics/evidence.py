@@ -133,12 +133,22 @@ def capture_evidence(
         rows = rows[:MAX_UNSAMPLED_ROWS]
         quality_flags.append("sampled")
 
-    # 4. Canonical digest calculation
+    # 4. Resolve the published definition version actually used for this query.
+    publication = store.conn.execute(
+        "SELECT version FROM definition_publication "
+        "WHERE tenant_id=? AND definition_id=? AND effective_to IS NULL",
+        (tenant_id, metric_defn.metric_id),
+    ).fetchone()
+    definition_version = publication["version"] if publication is not None else None
+    if definition_version is None:
+        quality_flags.append("definition_version_unknown")
+
+    # 5. Canonical digest calculation
     digest = compute_canonical_digest(rows)
     artifact_id = f"ev-{new_id()[:12]}"
     created_at = now_iso()
 
-    # 5. Payload storage strategy (JSON vs Parquet in ObjectStore)
+    # 6. Payload storage strategy (JSON vs Parquet in ObjectStore)
     storage_format = "json"
     payload_json = None
     parquet_key = None
@@ -154,7 +164,7 @@ def capture_evidence(
         obj_meta = objects.put_evidence_object(tenant_id, artifact_id, parquet_bytes)
         parquet_key = obj_meta["key"]
 
-    # 6. Persist immutable record in SQLite
+    # 7. Persist immutable record in SQLite
     store.conn.execute(
         """INSERT INTO evidence_artifact(
             tenant_id, id, investigation_id, parent_artifact_ids_json, evidence_type, support_status,
@@ -171,7 +181,7 @@ def capture_evidence(
             support_status.value,
             json.dumps(quality_flags),
             metric_defn.metric_id,
-            1,
+            definition_version,
             metric_defn.dataset_id,
             dataset_revision,
             json.dumps(plan),

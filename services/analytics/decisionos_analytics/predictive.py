@@ -424,6 +424,71 @@ def record_prediction(
     }
 
 
+def count_predictions(store: Store, tenant_id: str) -> int:
+    return store.conn.execute(
+        "SELECT COUNT(*) c FROM predictive_prediction WHERE tenant_id=?",
+        (tenant_id,),
+    ).fetchone()["c"]
+
+
+def list_predictions(
+    store: Store,
+    tenant_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        """SELECT p.*, t.name AS target_name,
+                  m.status AS model_status
+           FROM predictive_prediction p
+           LEFT JOIN predictive_target t
+             ON p.tenant_id = t.tenant_id AND p.target_id = t.id
+           LEFT JOIN predictive_model m
+             ON p.tenant_id = m.tenant_id AND p.model_id = m.id
+           WHERE p.tenant_id=?
+           ORDER BY p.created_at DESC
+           LIMIT ? OFFSET ?""",
+        (tenant_id, limit, offset),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = dict(row)
+        feature_snapshot = json.loads(d.pop("feature_snapshot_json") or "{}")
+        age = feature_snapshot.get("case_age_hours")
+        out.append(
+            {
+                "id": d["id"],
+                "prediction_id": d["id"],
+                "tenant_id": d["tenant_id"],
+                "case_id": d["entity_id"],
+                "entity_id": d["entity_id"],
+                "model_id": d["model_id"],
+                "model_version": d["model_version"],
+                "model_status": d["model_status"],
+                "target_id": d["target_id"],
+                "target_name": d["target_name"],
+                "outcome_window": d["outcome_window"],
+                "observation_time": d["observation_time"],
+                "deadline": None,
+                "current_age": f"{age}h" if age is not None else None,
+                "case_state": "scored",
+                "score": d["score"],
+                "risk_tier": d["risk_tier"],
+                "threshold": d["threshold_used"],
+                "threshold_used": d["threshold_used"],
+                "suitability_state": d["suitability_status"],
+                "probability_status": "recorded",
+                "last_scored": d["created_at"],
+                "data_freshness": None,
+                "reason": None,
+                "factors": [],
+                "feature_snapshot": feature_snapshot,
+                "created_at": d["created_at"],
+            }
+        )
+    return out
+
+
 def get_prediction(store: Store, tenant_id: str, prediction_id: str) -> dict[str, Any] | None:
     row = store.conn.execute(
         "SELECT * FROM predictive_prediction WHERE tenant_id=? AND id=?",

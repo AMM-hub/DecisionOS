@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS evidence_artifact (
   support_status TEXT NOT NULL DEFAULT 'supporting',
   quality_flags_json TEXT NOT NULL DEFAULT '[]',
   metric_id TEXT NOT NULL,
-  definition_version INTEGER NOT NULL DEFAULT 1,
+  definition_version INTEGER,
   dataset_id TEXT NOT NULL,
   dataset_revision INTEGER NOT NULL DEFAULT 1,
   resolved_plan_json TEXT NOT NULL DEFAULT '{}',
@@ -516,9 +516,79 @@ def _migration_002_decision_tenant_unique(conn: sqlite3.Connection) -> None:
         raise RuntimeError(f"migration 2 left foreign-key violations: {violations!r}")
 
 
+_EVIDENCE_COLUMNS = (
+    "tenant_id",
+    "id",
+    "investigation_id",
+    "parent_artifact_ids_json",
+    "evidence_type",
+    "support_status",
+    "quality_flags_json",
+    "metric_id",
+    "definition_version",
+    "dataset_id",
+    "dataset_revision",
+    "resolved_plan_json",
+    "query_params_json",
+    "canonical_digest",
+    "storage_format",
+    "payload_json",
+    "parquet_key",
+    "row_count",
+    "exactness_class",
+    "reproducibility_status",
+    "created_by",
+    "created_at",
+)
+
+_EVIDENCE_REBUILD_DDL = """
+CREATE TABLE evidence_r10_rebuild (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  id TEXT NOT NULL,
+  investigation_id TEXT NOT NULL,
+  parent_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+  evidence_type TEXT NOT NULL DEFAULT 'observed',
+  support_status TEXT NOT NULL DEFAULT 'supporting',
+  quality_flags_json TEXT NOT NULL DEFAULT '[]',
+  metric_id TEXT NOT NULL,
+  definition_version INTEGER,
+  dataset_id TEXT NOT NULL,
+  dataset_revision INTEGER NOT NULL DEFAULT 1,
+  resolved_plan_json TEXT NOT NULL DEFAULT '{}',
+  query_params_json TEXT NOT NULL DEFAULT '{}',
+  canonical_digest TEXT NOT NULL,
+  storage_format TEXT NOT NULL DEFAULT 'json',
+  payload_json TEXT,
+  parquet_key TEXT,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  exactness_class TEXT NOT NULL DEFAULT 'exact',
+  reproducibility_status TEXT NOT NULL DEFAULT 'reproducible',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  FOREIGN KEY (tenant_id, investigation_id) REFERENCES investigation(tenant_id, id)
+)
+"""
+
+
+def _migration_003_evidence_definition_version_nullable(conn: sqlite3.Connection) -> None:
+    """Allow unknown definition provenance instead of mislabelling it as v1."""
+    columns = ", ".join(_EVIDENCE_COLUMNS)
+    conn.execute("DROP TABLE IF EXISTS evidence_r10_rebuild")
+    conn.execute(_EVIDENCE_REBUILD_DDL)
+    conn.execute(f"INSERT INTO evidence_r10_rebuild ({columns}) SELECT {columns} FROM evidence_artifact")
+    conn.execute("DROP TABLE evidence_artifact")
+    conn.execute("ALTER TABLE evidence_r10_rebuild RENAME TO evidence_artifact")
+
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(f"migration 3 left foreign-key violations: {violations!r}")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "initial_schema", _migration_001_initial_schema),
     (2, "decision_tenant_unique", _migration_002_decision_tenant_unique),
+    (3, "evidence_definition_version_nullable", _migration_003_evidence_definition_version_nullable),
 ]
 
 

@@ -157,28 +157,34 @@ def test_master_golden_pilot_journey(pilot_ctx):
         },
     )
     assert risk_res.status_code == 200
-    model_id = risk_res.json()["risk_config"]["model"]["id"]
+    risk_config = risk_res.json()["risk_config"]
+    model_id = risk_config["model"]["id"]
+    target_id = risk_config["target"]["id"]
 
-    from decisionos_analytics.predictive import transition_model_status
+    from decisionos_analytics.predictive import record_prediction, transition_model_status
     transition_model_status(store, tenant, model_id, "evaluated", user)
     transition_model_status(store, tenant, model_id, "approved", user)
     transition_model_status(store, tenant, model_id, "active", user)
 
     # -----------------------------------------------------------------------
-    # Step 7: Score Predictive Risk Case
+    # Step 7: Persist a Predictive Risk Case
+    # (the score API refuses without a trained artifact, so this journey seeds
+    # the persisted prediction directly to exercise the evidence path)
     # -----------------------------------------------------------------------
-    score_res = client.post(
-        "/v1/predictive/score",
-        headers=headers,
-        json={
-            "model_id": model_id,
-            "case_id": "T1004",
-            "observation_time": "2026-10-01T14:00:00Z",
-            "features": {"case_age_hours": 3.0, "queue": "Escalations"},
-        },
+    score_data = record_prediction(
+        store=store,
+        tenant_id=tenant,
+        model_id=model_id,
+        target_id=target_id,
+        entity_id="T1004",
+        observation_time="2026-10-01T14:00:00Z",
+        score=0.42,
+        risk_tier="LOW",
+        threshold_used=0.5,
+        outcome_window="24h",
+        source_dataset_revision=1,
+        feature_snapshot={"case_age_hours": 3.0, "queue": "Escalations"},
     )
-    assert score_res.status_code == 200
-    score_data = score_res.json()
     assert score_data["risk_tier"] in ("HIGH", "MEDIUM", "LOW")
     pred_id = score_data["prediction_id"]
 
@@ -212,7 +218,7 @@ def test_master_golden_pilot_journey(pilot_ctx):
     # -----------------------------------------------------------------------
     brief = DecisionBrief(
         problem="High risk of 24h SLA breach on Escalation tickets",
-        relevant_findings=["Predictive score 0.65 for T1004 in Escalations queue"],
+        relevant_findings=["Persisted predictive risk for T1004 in Escalations queue"],
         proposed_action="Reallocate 2 agents from Tier1 to Escalations queue",
         baseline_option="Status quo staffing",
         scope="Queue Operations",

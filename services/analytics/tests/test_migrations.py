@@ -159,8 +159,8 @@ def _copy_live_v0_or_build(tmp_path: Path) -> tuple[Path, bool]:
 def test_fresh_database_applies_both_migrations(tmp_path):
     conn = _connect(tmp_path / "fresh.sqlite3")
     try:
-        assert apply_pending(conn) == [1, 2]
-        assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 2
+        assert apply_pending(conn) == [1, 2, 3]
+        assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 3
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
@@ -175,12 +175,12 @@ def test_existing_v0_database_upgrades_without_data_loss(tmp_path):
         with pytest.raises(sqlite3.OperationalError):
             conn.execute("PRAGMA foreign_key_check").fetchall()
 
-        assert apply_pending(conn) == [1, 2]
+        assert apply_pending(conn) == [1, 2, 3]
 
         assert conn.execute("SELECT COUNT(*) FROM decision").fetchone()[0] == decisions_before
         assert conn.execute("SELECT COUNT(*) FROM decision_evidence_binding").fetchone()[0] == bindings_before
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 2
+        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 3
     finally:
         conn.close()
 
@@ -206,7 +206,7 @@ def test_database_newer_than_code_is_refused(tmp_path):
 def test_rerun_on_current_database_is_a_no_op(tmp_path):
     conn = _connect(tmp_path / "current.sqlite3")
     try:
-        assert apply_pending(conn) == [1, 2]
+        assert apply_pending(conn) == [1, 2, 3]
         versions_before = conn.execute("SELECT * FROM schema_version ORDER BY version").fetchall()
         schema_before = conn.execute(
             "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
@@ -226,7 +226,7 @@ def test_rerun_on_current_database_is_a_no_op(tmp_path):
 def test_composite_foreign_key_is_enforced_after_migration(tmp_path):
     conn = _connect(tmp_path / "fk.sqlite3")
     try:
-        assert apply_pending(conn) == [1, 2]
+        assert apply_pending(conn) == [1, 2, 3]
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
         conn.execute(

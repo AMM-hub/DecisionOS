@@ -1771,14 +1771,28 @@ def create_app(data_dir: Path) -> FastAPI:
         observation_time = body.get("observation_time", now_iso())
         deadline = body.get("deadline")
         current_status = body.get("current_status")
-        features = body.get("features", {})
 
-        from .predictive import get_predictive_model, record_prediction
+        from .predictive import get_predictive_model
         from .risk import CaseState, evaluate_case_state
 
         model = get_predictive_model(store, tenant, model_id)
         if model is None:
-            raise HTTPException(404, "not found")
+            # Preserve tenant isolation: a model owned by another tenant is a
+            # 404. An unknown model id has no trained artifact either, so it
+            # gets the same honest refusal as an untrained model.
+            exists_elsewhere = store.conn.execute(
+                "SELECT 1 FROM predictive_model WHERE id=?", (model_id,)
+            ).fetchone()
+            if exists_elsewhere:
+                raise HTTPException(404, "not found")
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "model_not_trained",
+                    "detail": "No trained artifact exists for this model version; scoring is unavailable.",
+                    "status": 409,
+                },
+            )
 
         if model["status"] != "active":
             return {
@@ -1809,40 +1823,39 @@ def create_app(data_dir: Path) -> FastAPI:
                 "reason": reason,
             }
 
-        score = 0.65
-        threshold_policy = model.get("threshold_policy", {})
-        threshold = threshold_policy.get("threshold", 0.5)
+        artifact_ref = model.get("model_artifact_path") or model.get("artifact")
+        if not artifact_ref or not Path(str(artifact_ref)).exists():
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "model_not_trained",
+                    "detail": "No trained artifact exists for this model version; scoring is unavailable.",
+                    "status": 409,
+                },
+            )
 
-        risk_tier = "HIGH" if score >= threshold else ("MEDIUM" if score >= threshold * 0.7 else "LOW")
-
-        pred_rec = record_prediction(
-            store=store,
-            tenant_id=tenant,
-            model_id=model_id,
-            target_id=model["target_id"],
-            entity_id=case_id,
-            observation_time=observation_time,
-            score=score,
-            risk_tier=risk_tier,
-            threshold_used=threshold,
-            outcome_window=model.get("outcome_window", "24h"),
-            source_dataset_revision=model["training_dataset_revision"],
-            feature_snapshot=features,
+        # A trained artifact exists on disk, but this build has no runtime
+        # loader/scorer. Refuse explicitly instead of emitting a fabricated score.
+        return api_error(
+            501,
+            "scoring_not_implemented",
+            "A trained artifact exists but runtime scoring is not implemented in this build.",
         )
 
-        return {
-            "prediction_id": pred_rec["prediction_id"],
-            "case_id": case_id,
-            "case_state": CaseState.ELIGIBLE.value,
-            "score": score,
-            "threshold": threshold,
-            "risk_tier": risk_tier,
-            "model_id": model_id,
-            "model_version": model["version"],
-            "model_status": model["status"],
-            "observation_time": observation_time,
-            "created_at": pred_rec["created_at"],
-        }
+    @app.get("/v1/predictive/predictions")
+    async def list_predictive_predictions_api(
+        response: Response,
+        pagination: tuple[int, int] = Depends(page_params),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        limit, offset = pagination
+        from .predictive import count_predictions, list_predictions
+        total = count_predictions(store, tenant)
+        items = list_predictions(store, tenant, limit=limit, offset=offset)
+        response.headers["X-Total-Count"] = str(total)
+        return items
 
     @app.get("/v1/predictive/predictions/{prediction_id}")
     async def get_predictive_prediction_api(prediction_id: str, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
@@ -2351,7 +2364,69 @@ def create_app(data_dir: Path) -> FastAPI:
         if dec is None:
             raise HTTPException(404, "not found")
 
-        # Compute comparative pre vs post decision metrics
+        from .evidence import EvidenceError, get_evidence
+
+        unavailable: list[str] = []
+        baseline_failures: list[str] = []
+        baseline_values: dict[str, Any] = {}
+
+        evidence_ids: list[str] = []
+        binding_rows = store.conn.execute(
+            "SELECT evidence_id FROM decision_evidence_binding WHERE tenant_id=? AND decision_id=?",
+            (tenant, decision_id),
+        ).fetchall()
+        evidence_ids.extend(row["evidence_id"] for row in binding_rows)
+        for evidence_id in dec.brief.evidence_coverage:
+            if evidence_id not in evidence_ids:
+                evidence_ids.append(evidence_id)
+
+        for evidence_id in evidence_ids:
+            try:
+                evidence = get_evidence(store, objects, tenant, evidence_id)
+            except EvidenceError:
+                baseline_failures.append(f"evidence:{evidence_id}")
+                continue
+            metric_id = evidence.get("metric_id")
+            results = evidence.get("results")
+            if not metric_id or not isinstance(results, list) or len(results) != 1:
+                baseline_failures.append(f"evidence:{evidence_id}")
+                continue
+            value = results[0].get("value") if isinstance(results[0], dict) else None
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                baseline_failures.append(f"evidence:{evidence_id}")
+                continue
+            baseline_values[metric_id] = value
+
+        baseline = baseline_values or None
+        if baseline is None:
+            unavailable.append("baseline")
+            unavailable.extend(baseline_failures)
+
+        observed = dict(dec.outcome.observed_results) if dec.outcome is not None else None
+        if observed is None:
+            unavailable.append("observed")
+
+        counter_metrics = []
+        for name in dec.brief.counter_metrics:
+            observed_value = observed.get(name) if observed is not None else None
+            baseline_value = baseline.get(name) if baseline is not None else None
+            if observed_value is None or baseline_value is None:
+                unavailable.append(f"counter_metric:{name}")
+            counter_metrics.append(
+                {
+                    "name": name,
+                    "baseline": baseline_value,
+                    "observed": observed_value,
+                    "status": None,
+                }
+            )
+
+        verdict_recommendation = dec.outcome.review_verdict.value if dec.outcome is not None else None
+        if verdict_recommendation is None:
+            unavailable.append("verdict_recommendation")
+
+        deduped_unavailable = list(dict.fromkeys(unavailable))
+
         return {
             "decision_id": dec.id,
             "title": dec.title,
@@ -2359,33 +2434,15 @@ def create_app(data_dir: Path) -> FastAPI:
             "owner": dec.brief.owner or dec.created_by,
             "created_at": dec.created_at,
             "expected_effect": dec.brief.expected_effect,
-            "baseline": {
-                "metric": "m_sla_breach_rate",
-                "value": 18.5,
-                "unit": "percent",
-                "period": "14d_pre_decision",
-            },
-            "observed": {
-                "metric": "m_sla_breach_rate",
-                "value": 11.2,
-                "unit": "percent",
-                "period": "14d_post_decision",
-            },
-            "counter_metrics": [
-                {
-                    "name": "Ticket Reopen Rate",
-                    "baseline": "4.2%",
-                    "observed": "3.8%",
-                    "status": "healthy",
-                },
-                {
-                    "name": "Average Resolution Hours",
-                    "baseline": "19.5h",
-                    "observed": "14.2h",
-                    "status": "improved",
-                }
-            ],
-            "verdict_recommendation": "supported_improvement",
+            "baseline": baseline,
+            "observed": observed,
+            "counter_metrics": counter_metrics,
+            "verdict_recommendation": verdict_recommendation,
+            "unavailable": deduped_unavailable,
+            "reason": (
+                "Only recorded outcomes and bound evidence with a computed value are reported. "
+                "Values that could not be computed are null and listed in 'unavailable'."
+            ),
             "existing_outcome": dec.outcome.__dict__ if dec.outcome else None,
         }
 

@@ -217,7 +217,20 @@ def test_full_operational_decision_loop_integration(cert_app):
     client.post(f"/v1/predictive/models/{mod['id']}/transition", headers=alpha_mgr, json={"status": "approved"})
     client.post(f"/v1/predictive/models/{mod['id']}/transition", headers=alpha_mgr, json={"status": "active"})
 
-    score_res = client.post("/v1/predictive/score", headers=alpha_mgr, json={"model_id": mod["id"], "case_id": "CASE-100"}).json()
+    score_res = record_prediction(
+        store=store,
+        tenant_id="tenant_alpha",
+        model_id=mod["id"],
+        target_id=tgt["id"],
+        entity_id="CASE-100",
+        observation_time="2026-03-01T00:00:00Z",
+        score=0.42,
+        risk_tier="LOW",
+        threshold_used=0.5,
+        outcome_window="24h",
+        source_dataset_revision=1,
+        feature_snapshot={},
+    )
 
     # 2. Launch Investigation from Risk Prediction
     inv_res = client.post("/v1/investigations", headers=alpha_mgr, json={

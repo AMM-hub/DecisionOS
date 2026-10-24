@@ -76,13 +76,13 @@ def test_evidence_api_flow_and_tenant_isolation(test_app):
     }
     store.conn.execute(
         "INSERT INTO definition_version (tenant_id, definition_id, version, content, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        ("tenant_alpha", "m_occupancy", 1, json.dumps(defn_content), "alpha.manager", now_iso())
+        ("tenant_alpha", "m_occupancy", 2, json.dumps(defn_content), "alpha.manager", now_iso())
     )
     store.conn.execute(
         """INSERT INTO definition_publication (
             tenant_id, definition_id, version, semantic_release_id, effective_from, published_at, approved_by, change_reason
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        ("tenant_alpha", "m_occupancy", 1, "rel-1", now_iso(), now_iso(), "alpha.manager", "initial")
+        ("tenant_alpha", "m_occupancy", 2, "rel-2", now_iso(), now_iso(), "alpha.manager", "second publication")
     )
     store.conn.commit()
 
@@ -106,6 +106,7 @@ def test_evidence_api_flow_and_tenant_isolation(test_app):
     assert data["digest_verified"] is True
     assert data["dataset_revision"] == 1
     assert data["metric_id"] == "m_occupancy"
+    assert data["definition_version"] == 2
     ev_id = data["artifact_id"]
 
     # 4. Get Evidence via API (Same Tenant)

@@ -172,6 +172,11 @@
             <span><strong>State Reason:</strong> {{ selectedItem.reason }}</span>
           </div>
 
+          <div v-if="scoreError" class="banner" data-tone="warn">
+            <svg><use href="#i-alert"/></svg>
+            <span><strong>Scoring unavailable:</strong> {{ scoreError }}</span>
+          </div>
+
           <!-- Contributing Factors Breakdown -->
           <div v-if="selectedItem.factors && selectedItem.factors.length > 0">
             <div class="faint" style="font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px;">
@@ -218,7 +223,7 @@ import { useApi } from '~/composables/api'
 import { useLocale, t } from '~/composables/locale'
 import { formatDateTime } from '~/composables/format'
 
-const { post } = useApi()
+const { get, post } = useApi()
 const { locale } = useLocale()
 
 interface CaseRiskItem {
@@ -248,12 +253,16 @@ const riskQueue = ref<CaseRiskItem[]>([])
 const selectedItem = ref<CaseRiskItem | null>(null)
 const launchingInv = ref(false)
 const invResult = ref<{ id: string } | null>(null)
+const scoreError = ref('')
 const tableScroll = ref<HTMLElement | null>(null)
 const isScrollable = ref(false)
 
 async function loadRiskQueue() {
   loading.value = true
   try {
+    const items = await get<CaseRiskItem[]>('/predictive/predictions?limit=200')
+    riskQueue.value = Array.isArray(items) ? items : []
+  } catch {
     riskQueue.value = []
   } finally {
     loading.value = false
@@ -269,8 +278,9 @@ function updateScrollable() {
 async function launchProactiveInvestigation(item: CaseRiskItem) {
   launchingInv.value = true
   invResult.value = null
+  scoreError.value = ''
   try {
-    const inv = await post<{ id: string }>('/v1/investigations', {
+    const inv = await post<{ id: string }>('/investigations', {
       title: `Risk Investigation: ${item.case_id} (${item.target_name})`,
       question: `What operational factors drive breach risk for ${item.case_id}?`,
       source_type: 'predictive_risk',
@@ -281,19 +291,19 @@ async function launchProactiveInvestigation(item: CaseRiskItem) {
 
     // If prediction exists, bind it as estimated evidence
     try {
-      const pred = await post<{ prediction_id: string }>('/v1/predictive/score', {
+      const pred = await post<{ prediction_id: string }>('/predictive/score', {
         model_id: item.model_id,
         case_id: item.case_id,
         observation_time: new Date().toISOString(),
         deadline: item.deadline,
       })
       if (pred && pred.prediction_id) {
-        await post(`/v1/predictive/predictions/${pred.prediction_id}/evidence`, {
+        await post(`/predictive/predictions/${pred.prediction_id}/evidence`, {
           investigation_id: inv.id,
         })
       }
-    } catch {
-      // Best-effort evidence binding
+    } catch (error) {
+      scoreError.value = error instanceof Error ? error.message : 'Predictive scoring is unavailable.'
     }
   } finally {
     launchingInv.value = false

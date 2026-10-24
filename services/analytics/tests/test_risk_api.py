@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from decisionos_analytics.api import create_app
+from decisionos_analytics.predictive import record_prediction
+from decisionos_analytics.store import now_iso
 
 
 @pytest.fixture
@@ -116,7 +118,7 @@ def test_predictive_scoring_and_suspended_model(api_client):
     client.post(f"/v1/predictive/models/{mod['id']}/transition", headers=alpha_headers, json={"status": "approved"})
     client.post(f"/v1/predictive/models/{mod['id']}/transition", headers=alpha_headers, json={"status": "active"})
 
-    # 1. Score eligible case
+    # 1. Scoring an eligible case refuses because no trained artifact exists
     score_res = client.post(
         "/v1/predictive/score",
         headers=alpha_headers,
@@ -127,11 +129,20 @@ def test_predictive_scoring_and_suspended_model(api_client):
             "deadline": "2026-03-02T10:00:00Z",
         }
     )
-    assert score_res.status_code == 200
-    res = score_res.json()
-    assert res["case_state"] == "eligible"
-    assert res["score"] is not None
-    assert res["prediction_id"].startswith("prd-")
+    assert score_res.status_code == 409
+    assert score_res.json() == {
+        "code": "model_not_trained",
+        "detail": "No trained artifact exists for this model version; scoring is unavailable.",
+        "status": 409,
+    }
+
+    unknown_res = client.post(
+        "/v1/predictive/score",
+        headers=alpha_headers,
+        json={"model_id": "v1", "case_id": "case-999"},
+    )
+    assert unknown_res.status_code == 409
+    assert unknown_res.json()["code"] == "model_not_trained"
 
     # 2. Score already overdue case -> returns state already_overdue and score None
     overdue_res = client.post(
@@ -166,8 +177,21 @@ def test_prediction_evidence_and_tenant_isolation_404(api_client):
     client.post(f"/v1/predictive/models/{mod['id']}/transition", headers=alpha_headers, json={"status": "approved"})
     client.post(f"/v1/predictive/models/{mod['id']}/transition", headers=alpha_headers, json={"status": "active"})
 
-    score_res = client.post("/v1/predictive/score", headers=alpha_headers, json={"model_id": mod["id"], "case_id": "case-alpha"}).json()
-    pred_id = score_res["prediction_id"]
+    pred = record_prediction(
+        store=store,
+        tenant_id="tenant_alpha",
+        model_id=mod["id"],
+        target_id=tgt["id"],
+        entity_id="case-alpha",
+        observation_time=now_iso(),
+        score=0.42,
+        risk_tier="LOW",
+        threshold_used=0.5,
+        outcome_window="24h",
+        source_dataset_revision=1,
+        feature_snapshot={},
+    )
+    pred_id = pred["prediction_id"]
 
     # Alpha investigation
     inv_res = client.post("/v1/investigations", headers=alpha_headers, json={"title": "Alpha Risk Inv", "question": "Why?"}).json()

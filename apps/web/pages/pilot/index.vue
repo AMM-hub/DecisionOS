@@ -101,126 +101,22 @@
         </NuxtLink>
       </div>
 
-      <!-- Precision SVG Telemetry Charts Grid -->
-      <div class="grid grid-2" style="margin-bottom: 14px;">
-        <!-- Trend Chart: SLA Attainment vs Target -->
-        <div class="panel">
-          <div class="panel-head">
-            <h2>SLA Attainment vs Target</h2>
-            <span class="sub">12-week telemetry · %</span>
-          </div>
-          <div class="chart-wrap" style="padding: 16px 14px 6px;">
-            <svg class="chart-svg" viewBox="0 0 660 210" preserveAspectRatio="xMidYMid meet" role="img" aria-label="SLA attainment trend over 12 weeks versus target">
-              <defs>
-                <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.20"/>
-                  <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.015"/>
-                </linearGradient>
-              </defs>
-              <!-- Micro-gridlines -->
-              <g stroke="var(--border)" stroke-width="1">
-                <line x1="46" y1="20"  x2="648" y2="20"/>
-                <line x1="46" y1="58"  x2="648" y2="58"/>
-                <line x1="46" y1="96"  x2="648" y2="96"/>
-                <line x1="46" y1="134" x2="648" y2="134"/>
-                <line x1="46" y1="172" x2="648" y2="172"/>
-              </g>
-              <line stroke="color-mix(in oklch, var(--border) 55%, transparent)" stroke-dasharray="2 4" stroke-width="1" x1="46" y1="39"  x2="648" y2="39"/>
-              <line stroke="color-mix(in oklch, var(--border) 55%, transparent)" stroke-dasharray="2 4" stroke-width="1" x1="46" y1="77"  x2="648" y2="77"/>
-              <line stroke="color-mix(in oklch, var(--border) 55%, transparent)" stroke-dasharray="2 4" stroke-width="1" x1="46" y1="115" x2="648" y2="115"/>
-              <line stroke="color-mix(in oklch, var(--border) 55%, transparent)" stroke-dasharray="2 4" stroke-width="1" x1="46" y1="153" x2="648" y2="153"/>
-
-              <!-- Axis Labels -->
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="38" y="24"  text-anchor="end">100</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="38" y="62"  text-anchor="end">95</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="38" y="100" text-anchor="end">90</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="38" y="138" text-anchor="end">85</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="38" y="176" text-anchor="end">80</text>
-
-              <!-- Target Benchmark at 92.0% -->
-              <line stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="4 4" x1="46" y1="81.6" x2="648" y2="81.6"/>
-              <text fill="var(--muted)" font-family="var(--font-mono)" font-size="10px" font-weight="600" x="648" y="78" text-anchor="end">target 92.0%</text>
-
-              <!-- Area Fill & Path -->
-              <path fill="url(#areaGrad)" d="M 71,146.4 L 123,149.3 L 175,154.6 L 227,161.1 L 279,158.0 L 331,153.2 L 383,150.2 L 435,152.4 L 487,163.0 L 539,141.5 L 591,143.8 L 643,142.3 L 643,172 L 71,172 Z"/>
-              <path fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M 71,146.4 L 123,149.3 L 175,154.6 L 227,161.1 L 279,158.0 L 331,153.2 L 383,150.2 L 435,152.4 L 487,163.0 L 539,141.5 L 591,143.8 L 643,142.3"/>
-
-              <!-- Markers -->
-              <g>
-                <circle cx="71"  cy="146.4" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="123" cy="149.3" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="175" cy="154.6" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="227" cy="161.1" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="279" cy="158.0" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="331" cy="153.2" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="383" cy="150.2" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="435" cy="152.4" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="487" cy="163.0" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="539" cy="141.5" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="591" cy="143.8" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-                <circle cx="643" cy="142.3" r="3.4" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
-              </g>
-
-              <!-- X-Axis Labels -->
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="71"  y="198" text-anchor="middle">W1</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="175" y="198" text-anchor="middle">W3</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="279" y="198" text-anchor="middle">W5</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="383" y="198" text-anchor="middle">W7</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="487" y="198" text-anchor="middle">W9</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="591" y="198" text-anchor="middle">W11</text>
-            </svg>
-          </div>
-          <div style="display: flex; gap: 16px; padding: 4px 14px 12px; font-size: 11.5px; color: var(--muted);">
-            <span>Attainment: <strong class="isolate mono" style="color:var(--accent);">94.2%</strong></span>
-            <span>Target: <strong class="isolate mono">92.0%</strong></span>
-          </div>
+      <!-- Telemetry Series -->
+      <div class="panel" style="margin-bottom: 14px;">
+        <div class="panel-head">
+          <h2>Operational Telemetry</h2>
+          <span class="sub">live pilot series</span>
         </div>
-
-        <!-- SLA Decay Curve -->
-        <div class="panel">
-          <div class="panel-head">
-            <h2>SLA Decay Curve &middot; West Region</h2>
-            <span class="sub">hours-to-breach forecast</span>
+        <div class="empty" style="padding: 3.5rem 1.5rem;">
+          <div class="e-ico">
+            <svg><use href="#i-pulse"/></svg>
           </div>
-          <div class="chart-wrap" style="padding: 16px 14px 6px;">
-            <svg class="chart-svg" viewBox="0 0 660 210" preserveAspectRatio="xMidYMid meet" role="img" aria-label="SLA decay curve showing margin to breach decaying over 48 hours">
-              <defs>
-                <linearGradient id="decayGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="var(--crit)" stop-opacity="0.16"/>
-                  <stop offset="100%" stop-color="var(--crit)" stop-opacity="0.01"/>
-                </linearGradient>
-              </defs>
-              <g stroke="var(--border)" stroke-width="1">
-                <line x1="40" y1="20"  x2="648" y2="20"/>
-                <line x1="40" y1="58"  x2="648" y2="58"/>
-                <line x1="40" y1="96"  x2="648" y2="96"/>
-                <line x1="40" y1="134" x2="648" y2="134"/>
-                <line x1="40" y1="172" x2="648" y2="172"/>
-              </g>
-
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="32" y="24"  text-anchor="end">8h</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="32" y="62"  text-anchor="end">6h</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="32" y="100" text-anchor="end">4h</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="32" y="138" text-anchor="end">2h</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="32" y="176" text-anchor="end">0h</text>
-
-              <line stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="4 4" x1="40" y1="134" x2="648" y2="134"/>
-              <text fill="var(--crit-ink)" font-family="var(--font-mono)" font-size="10px" font-weight="600" x="648" y="130" text-anchor="end">breach boundary 2.0h</text>
-
-              <path fill="url(#decayGrad)" d="M 40,30 C 120,42 190,64 260,84 C 330,104 400,118 470,126 C 520,131 590,134 648,136 L 648,172 L 40,172 Z"/>
-              <path fill="none" stroke="var(--crit)" stroke-width="2" stroke-linecap="round" d="M 40,30 C 120,42 190,64 260,84 C 330,104 400,118 470,126 C 520,131 590,134 648,136"/>
-              <circle cx="470" cy="126" r="3.6" fill="var(--surface)" stroke="var(--crit)" stroke-width="2"/>
-              <text fill="var(--crit-ink)" font-family="var(--font-mono)" font-size="10px" font-weight="600" x="470" y="116" text-anchor="middle">T+38h</text>
-
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="40"  y="198">now</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="340" y="198" text-anchor="middle">T+24h</text>
-              <text fill="var(--faint)" font-family="var(--font-mono)" font-size="10px" x="648" y="198" text-anchor="end">T+48h</text>
-            </svg>
-          </div>
-          <div style="display: flex; gap: 16px; padding: 4px 14px 12px; font-size: 11.5px; color: var(--muted);">
-            <span>Trajectory: <strong class="isolate mono" style="color:var(--crit-ink);">Decaying</strong></span>
-            <span>Estimated breach window: <strong class="isolate mono">T+38h</strong></span>
-          </div>
+          <h3>Awaiting telemetry</h3>
+          <p class="muted">No telemetry captured yet — refresh the pilot after ingestion to build a series.</p>
+          <button class="btn btn-primary btn-sm" style="margin-top: 10px;" @click="loadPilotSummary">
+            <svg><use href="#i-pulse"/></svg>
+            <span>Refresh pilot</span>
+          </button>
         </div>
       </div>
 
