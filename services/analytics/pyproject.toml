@@ -21,6 +21,7 @@ dependencies = [
   "pulp>=2.9,<4",  # pulp 4.x removed the LpStatus* constants this module uses
   "simpy>=4.1",
   "pm4py>=2.7",
+  "PyJWT[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]

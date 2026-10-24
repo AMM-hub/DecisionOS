@@ -109,4 +109,26 @@ open-sourcing the application or buying a commercial licence. The process-mining
 If DecisionOS is to be sold or hosted commercially, this must be resolved (licence purchase or replace
 with a permissive implementation). Flagged now, not at contract-signing time.
 
-Remaining open: **R9** (ops hardening), **R10** (migrations), **R11** (E2E in CI), **R12** (identity + seed).
+**R9 CLOSED.** Health now runs `PRAGMA quick_check` + schema version + write probe and returns 503 when
+degraded; `X-Request-Id` echoed and embedded in errors; one JSON access log per request; per-tenant token
+bucket (120/min) with `Retry-After`; `/v1/metrics` with p50/p95/p99 over a 1000-sample ring;
+`scripts/backup_db.py` (VACUUM INTO + integrity_check + sha256 + manifest). 401 tests.
+
+**R10 CLOSED.** Versioned migrations (`schema_version`, ordered MIGRATIONS, per-migration transactions, boot
+guard against a newer DB) and migration 2 fixing the unresolvable evidence FK. `PRAGMA foreign_key_check`
+now returns `[]` where it previously aborted — data preserved (6 decisions before/after). 406 tests.
+
+**R11 CLOSED.** The 52-config sweep now fails the build on console errors, exceptions, failed requests, bad
+values, broken images, document-level overflow or near-empty pages (`FAILURES: n`, `ALLOW_FINDINGS=1`
+overrides). New `e2e` CI job: compose build → up --wait → 60 s poll → sweep with the runner's Chrome →
+logs on failure → artifact upload → teardown. Local: `FAILURES: 0`.
+
+**R12 CLOSED.** Keycloak 26 under compose profile `auth` with realm `decisionos` (clients `decisionos-web`
+PKCE, `decisionos-api` bearer, `decisionos-cli` direct-grant for automation; roles and users imported).
+API validates RS256 against cached JWKS (300 s TTL), enforces iss/aud/exp, maps realm roles to RBAC; OIDC is
+ignored unless `DECISIONOS_OIDC_ISSUER` is set. 9 no-network tests. End-to-end proven: Keycloak token →
+`/v1/decisions` 200; garbage token 401; strict mode ignores demo headers (401) while the OIDC token still
+returns 200. `scripts/seed_demo.py` seeds a coherent demo idempotently (run 1: 6 created, run 2: 0 created /
+6 skipped).
+
+**Open:** P9 licence decision (pm4py AGPL v3) — business call, not code. Everything else in R7–R12 is closed.

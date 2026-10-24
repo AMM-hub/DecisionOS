@@ -38,9 +38,24 @@ docker compose up --build
 - Web: `http://localhost:3000`
 
 `.env.example` documents `DECISIONOS_AUTH_STRICT`, `DECISIONOS_JWT_SECRET`,
-`DECISIONOS_ALLOW_TOKEN_MINT`, and `DECISIONOS_DATA_DIR`. With strict auth on, the
-API refuses to boot unless the JWT secret is at least 32 bytes, and token minting
-stays disabled unless explicitly enabled.
+`DECISIONOS_ALLOW_TOKEN_MINT`, `DECISIONOS_DATA_DIR`, and the optional OIDC
+settings. With strict auth on, the API refuses to boot unless the JWT secret is
+at least 32 bytes, and token minting stays disabled unless explicitly enabled.
+
+### Cold-start demo data
+
+With the API running, seed an approved metric, a monitoring rule, and three
+decisions through the public API (safe to re-run):
+
+```bash
+docker compose up -d
+python scripts/seed_demo.py
+```
+
+`docker compose --profile auth up -d` additionally starts Keycloak at
+`http://localhost:8081` with the imported `decisionos` realm, roles
+`ops_manager`/`semantic_modeler`/`qa_operator`/`viewer`, and the demo users
+`alpha.manager` / `alpha.modeler` (password `DecisionOS-demo-1`).
 
 ### Local development (without Docker)
 

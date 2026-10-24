@@ -13,9 +13,12 @@ import json
 import os
 import secrets
 import time
+import urllib.request
 from typing import Any
 
 from fastapi import HTTPException
+
+from .oidc import verify_oidc_token
 
 # Master secret key resolution for JWT HMAC-SHA256 signature verification
 _DEV_RANDOM_SECRET: str | None = None
@@ -37,6 +40,66 @@ def get_jwt_secret() -> str:
     if _DEV_RANDOM_SECRET is None:
         _DEV_RANDOM_SECRET = secrets.token_hex(32)
     return _DEV_RANDOM_SECRET
+
+
+_OIDC_JWKS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_OIDC_JWKS_DEFAULT_TTL = 300.0
+
+
+def oidc_issuer() -> str:
+    return os.environ.get("DECISIONOS_OIDC_ISSUER", "").strip().rstrip("/")
+
+
+def oidc_audience() -> str:
+    return os.environ.get("DECISIONOS_OIDC_AUDIENCE", "decisionos-api").strip()
+
+
+def _oidc_jwks_ttl() -> float:
+    raw = os.environ.get("DECISIONOS_OIDC_JWKS_TTL", "").strip()
+    if not raw:
+        return _OIDC_JWKS_DEFAULT_TTL
+    try:
+        ttl = float(raw)
+    except ValueError:
+        return _OIDC_JWKS_DEFAULT_TTL
+    return ttl if ttl >= 0 else _OIDC_JWKS_DEFAULT_TTL
+
+
+def fetch_oidc_jwks(issuer: str, ttl: float | None = None) -> dict[str, Any]:
+    """Fetch and cache the provider's JWKS. Raises ValueError on any failure."""
+    if not issuer:
+        raise ValueError("OIDC issuer is not configured")
+    effective_ttl = _oidc_jwks_ttl() if ttl is None else ttl
+    now = time.monotonic()
+    cached = _OIDC_JWKS_CACHE.get(issuer)
+    if cached is not None and (now - cached[0]) < effective_ttl:
+        return cached[1]
+
+    url = f"{issuer}/protocol/openid-connect/certs"
+    try:
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - configured issuer only
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, TypeError) as err:
+        raise ValueError(f"Unable to fetch OIDC signing keys: {err}") from err
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("keys"), list):
+        raise ValueError("OIDC JWKS response is malformed")
+    _OIDC_JWKS_CACHE[issuer] = (now, payload)
+    return payload
+
+
+def verify_oidc_access_token(token: str) -> dict[str, Any]:
+    """Verify a bearer token against the configured OIDC issuer.
+
+    Raises ValueError when OIDC is not configured so callers can treat the
+    token as unauthenticated rather than falling back to header identity.
+    """
+    issuer = oidc_issuer()
+    if not issuer:
+        raise ValueError("OIDC is not configured")
+    jwks = fetch_oidc_jwks(issuer)
+    return verify_oidc_token(token, issuer, oidc_audience(), jwks)
 
 
 def __getattr__(name: str) -> Any:
@@ -156,8 +219,16 @@ def authenticate_identity(
         token = authorization[7:].strip()
         try:
             claims = verify_access_token(token)
-        except ValueError as err:
-            raise HTTPException(status_code=401, detail=f"Invalid authentication token: {err}") from err
+        except ValueError as hmac_err:
+            # An OIDC deployment accepts provider access tokens in addition to
+            # locally minted HMAC tokens. When no issuer is configured, OIDC is
+            # never attempted (a token cannot opt the server into OIDC).
+            if not oidc_issuer():
+                raise HTTPException(status_code=401, detail=f"Invalid authentication token: {hmac_err}") from hmac_err
+            try:
+                claims = verify_oidc_access_token(token)
+            except Exception as oidc_err:  # noqa: BLE001 - provider/JWKS failures are authentication failures
+                raise HTTPException(status_code=401, detail=f"Invalid authentication token: {oidc_err}") from oidc_err
 
         token_tenant = claims["tenant_id"]
         token_user = claims["sub"]
