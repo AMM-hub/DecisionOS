@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
@@ -30,6 +31,7 @@ def page_params(
     return limit, offset
 
 
+from . import operations
 from .execution import compile_plan, execute
 from .forecasting import (
     ForecastRefused,
@@ -92,15 +94,36 @@ class APIException(HTTPException):
 def api_error(status: int, code: str, detail: str, extra: dict | None = None) -> JSONResponse:
     """Return a flat, machine-readable error body.
 
-    Body: {"code": code, "detail": detail, "status": status[, ...extra]}
+    Body: {"code": code, "detail": detail, "status": status, "request_id": id[, ...extra]}
     Guarantees: detail is always a plain string, never a JSON-encoded object.
     """
-    body: dict = {"code": code, "detail": detail, "status": status}
+    body: dict = {
+        "code": code,
+        "detail": detail,
+        "status": status,
+        "request_id": operations.current_request_id(),
+    }
     if extra:
         body.update(extra)
     return JSONResponse(status_code=status, content=body)
 
+
+def _response_error_code(response: Response, status: int) -> str | None:
+    if status < 400:
+        return None
+    body = getattr(response, "body", None)
+    if body:
+        try:
+            payload = json.loads(body)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("code"), str) and payload["code"]:
+            return payload["code"]
+    return f"http_{status}"
+
+
 def create_app(data_dir: Path) -> FastAPI:
+    operations.configure_logging()
     get_jwt_secret()
     data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(data_dir / "control.sqlite3")
@@ -115,7 +138,12 @@ def create_app(data_dir: Path) -> FastAPI:
     )
     store.conn.commit()
 
+    metrics = operations.Metrics()
+    limiter = operations.TokenBucketLimiter(operations.rate_limit_from_env())
+
     app = FastAPI(title="DecisionOS local control plane (demo stand-in)", version="0.1.0")
+    app.state.metrics = metrics
+    app.state.rate_limiter = limiter
     # Demo local dev only: the Nuxt SPA (:3000) calls this (:8100) with custom
     # X-Tenant/X-User headers, which triggers a CORS preflight. Production
     # fronting is the Laravel API same-origin (§21.2); do not ship this wide-open.
@@ -133,22 +161,13 @@ def create_app(data_dir: Path) -> FastAPI:
 
     @app.exception_handler(json.JSONDecodeError)
     async def json_decode_error_handler(request: Request, exc: json.JSONDecodeError):
-        return JSONResponse(
-            status_code=400,
-            content={"code": "malformed_json", "detail": "Invalid JSON body format."}
-        )
+        return api_error(400, "malformed_json", "Invalid JSON body format.")
 
     @app.exception_handler(ValueError)
     async def value_error_handler(request: Request, exc: ValueError):
         if "JSON" in str(exc) or "Expecting value" in str(exc):
-            return JSONResponse(
-                status_code=400,
-                content={"code": "malformed_request", "detail": "Invalid request body."}
-            )
-        return JSONResponse(
-            status_code=422,
-            content={"code": "invalid_value", "detail": str(exc)}
-        )
+            return api_error(400, "malformed_request", "Invalid request body.")
+        return api_error(422, "invalid_value", str(exc))
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(request: Request, exc: RequestValidationError):
@@ -178,9 +197,89 @@ def create_app(data_dir: Path) -> FastAPI:
         finally:
             _current_auth_header.reset(reset_token)
 
+    def _rate_limit_key(request: Request) -> str:
+        tenant = request.headers.get("x-tenant")
+        auth_header = request.headers.get("authorization") or ""
+        if auth_header.lower().startswith("bearer "):
+            try:
+                claims = verify_access_token(auth_header[7:].strip())
+            except ValueError:
+                pass
+            else:
+                tenant = claims.get("tenant_id") or tenant
+        if tenant:
+            return f"tenant:{tenant}"
+        host = request.client.host if request.client else "unknown"
+        return f"ip:{host}"
+
+    access_logger = _logging.getLogger("decisionos.access")
+
+    @app.middleware("http")
+    async def operational_middleware(request: Request, call_next):
+        request_id = operations.valid_or_new_request_id(request.headers.get("x-request-id"))
+        rid_token, actor_token = operations.bind_request(request_id)
+        started = time.perf_counter()
+        status = 500
+        error_code: str | None = None
+        try:
+            if request.url.path != "/v1/health":
+                allowed, retry_after = limiter.allow(_rate_limit_key(request))
+                if not allowed:
+                    status = 429
+                    error_code = "rate_limited"
+                    response = api_error(
+                        429,
+                        "rate_limited",
+                        f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                    )
+                    response.headers["Retry-After"] = str(retry_after)
+                    response.headers["X-Request-Id"] = request_id
+                    return response
+            response = await call_next(request)
+            status = response.status_code
+            error_code = _response_error_code(response, status)
+            response.headers["X-Request-Id"] = request_id
+            return response
+        except Exception:  # noqa: BLE001 - record the failure then preserve HTTP 500 semantics
+            status = 500
+            error_code = "internal_error"
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            metrics.record(status, duration_ms, error_code)
+            actor = operations.current_actor()
+            access_logger.info(
+                "request",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": status,
+                    "duration_ms": round(duration_ms, 3),
+                    "tenant": actor.get("tenant"),
+                    "user": actor.get("user"),
+                },
+            )
+            operations.reset_request(rid_token, actor_token)
+
     @app.get("/v1/health")
     async def health():
-        return {"status": "ok", "service": "analytics-control-plane", "mode": "authenticated", "time": now_iso()}
+        healthy, checks, reason = operations.check_store_health(store)
+        body: dict[str, Any] = {
+            "status": "ok" if healthy else "degraded",
+            "service": "analytics-control-plane",
+            "mode": "authenticated",
+            "time": now_iso(),
+            "checks": checks,
+        }
+        if healthy:
+            return body
+        body["reason"] = reason
+        return JSONResponse(status_code=503, content=body)
+
+    @app.get("/v1/metrics")
+    async def metrics_api():
+        return metrics.snapshot()
 
     @app.post("/v1/auth/token")
     async def issue_token_api(request: Request):
@@ -230,6 +329,7 @@ def create_app(data_dir: Path) -> FastAPI:
             demo_users=DEMO_USERS,
         )
         _current_auth_role.set(role)
+        operations.bind_actor(tenant, user)
 
         strict = os.environ.get("DECISIONOS_AUTH_STRICT", "0") in ("1", "true", "yes")
         is_jwt_or_strict = bool(auth_hdr and auth_hdr.lower().startswith("bearer ")) or strict
