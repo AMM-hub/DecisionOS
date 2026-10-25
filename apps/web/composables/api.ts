@@ -105,6 +105,18 @@ export function useApi() {
     if (code === 'approval_not_allowed') return 'This user role cannot approve definitions.'
     if (code === 'revision_not_publishable') return 'Revision is not publishable (not validated, or already published).'
     if (code === 'concurrent_publish_conflict') return 'A concurrent publish moved the pointer first; refresh and retry.'
+    if (code === 'ai_model_not_configured') return 'No primary AI model is configured — add a provider and map the primary role in AI settings.'
+    if (code === 'provider_credential_unavailable') return 'The configured provider credential is unavailable — rotate the provider key in AI settings.'
+    if (code === 'provider_error') {
+      let detail = raw.slice(0, 200)
+      try {
+        const parsed = JSON.parse(raw)
+        if (typeof parsed?.detail === 'string' && parsed.detail) detail = parsed.detail
+      } catch {
+        // raw is not JSON; keep the truncated body
+      }
+      return `Provider error: ${detail}`
+    }
     if (status === 401) return 'Demo authentication missing (X-Tenant/X-User headers).'
     if (status === 404) return 'Not found for this tenant.'
     if (status === 409) return 'Conflict: ' + (code ?? raw.slice(0, 160))

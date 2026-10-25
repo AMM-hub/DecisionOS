@@ -48,6 +48,8 @@ const routeTitle = computed(() => {
   if (p === '/datasets') return t('nav.datasets', locale.value)
   if (p === '/metrics') return t('nav.metrics', locale.value)
   if (p === '/studio') return t('nav.studio', locale.value)
+  if (p === '/intelligence') return t('nav.intelligence', locale.value)
+  if (p === '/settings/ai') return t('nav.aiSettings', locale.value)
   if (p === '/uploads') return t('nav.uploads', locale.value)
   if (p === '/pilot/setup') return t('nav.pilot', locale.value)
   return t('nav.home', locale.value)
@@ -85,6 +87,8 @@ function closeMobileNav() {
         <symbol id="i-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
         <symbol id="i-ruler" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h18v8H3z"/><path d="M7 8v3M11 8v4M15 8v3M19 8v4"/></symbol>
         <symbol id="i-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6h7"/><path d="M18 8.5c0 4-4 4-9 4.5"/></symbol>
+        <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9 12 3.5Z"/></symbol>
+        <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
       </defs>
     </svg>
 
@@ -118,6 +122,10 @@ function closeMobileNav() {
             <NuxtLink to="/risk" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-alert"/></svg>
               <span>{{ t('nav.risk', locale) }}</span>
+            </NuxtLink>
+            <NuxtLink to="/intelligence" class="nav-item" @click="closeMobileNav">
+              <svg class="ico"><use href="#i-spark"/></svg>
+              <span>{{ t('nav.intelligence', locale) }}</span>
             </NuxtLink>
           </div>
 
@@ -164,6 +172,10 @@ function closeMobileNav() {
             <NuxtLink to="/uploads" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-upload"/></svg>
               <span>{{ t('nav.uploads', locale) }}</span>
+            </NuxtLink>
+            <NuxtLink to="/settings/ai" class="nav-item" @click="closeMobileNav">
+              <svg class="ico"><use href="#i-settings"/></svg>
+              <span>{{ t('nav.aiSettings', locale) }}</span>
             </NuxtLink>
           </div>
         </nav>

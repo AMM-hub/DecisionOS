@@ -880,3 +880,155 @@ export interface AnalysisArtifact {
   updated_at: string
   last_result?: AnalyticsQueryResponse | null
 }
+
+// ---- AI intelligence (P2b, spec §P2) --------------------------------------
+export type AiProviderStatus = 'active' | 'error'
+export type AiProviderKind = 'openai_compatible'
+
+export type AiModelRole =
+  | 'primary' | 'fast' | 'reasoning' | 'coding' | 'embedding' | 'fallback'
+
+export interface AiProvider {
+  id: string
+  name: string
+  kind: AiProviderKind | string
+  base_url: string
+  models: string[]
+  status: AiProviderStatus
+  last_tested_at: string | null
+  last_error: string | null
+  key_suffix: string
+  key_fingerprint: string
+  created_by?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AiModelRoleMapping {
+  provider_id: string
+  provider_name: string
+  provider_status: AiProviderStatus | string
+  model_id: string
+}
+
+export type AiModelMapping = Record<AiModelRole, AiModelRoleMapping | null> & {
+  roles: Record<AiModelRole, AiModelRoleMapping | null>
+}
+
+export interface AiToolCall {
+  name: string
+  input: Record<string, unknown>
+  ok: boolean
+  evidence_ref: string | null
+  refused: boolean
+  code: string | null
+  error: string | null
+}
+
+export interface AiChatUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
+export interface AiUsageEvent {
+  model_id: string
+  prompt_tokens: number
+  completion_tokens: number
+  latency_ms: number | null
+  round: number
+}
+
+export interface AiChatWarning {
+  ungrounded_numbers: string[]
+}
+
+export interface AiChatResponse {
+  answer: string
+  tool_calls: AiToolCall[]
+  usage: AiChatUsage
+  usage_events: AiUsageEvent[]
+  latency_ms: number
+  conversation_id: string
+  message_id: string
+  provider_id: string
+  model_id: string
+  warning?: AiChatWarning
+  ungrounded_numbers?: string[]
+}
+
+export interface AiConversationSummary {
+  id: string
+  title: string
+  created_by: string
+  created_at: string
+  updated_at: string
+  archived: boolean
+  message_count: number
+}
+
+export interface AiMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  tool_trace: AiToolCall[]
+  usage: Partial<AiChatUsage>
+  created_at: string
+}
+
+export interface AiConversationDetail {
+  id: string
+  title: string
+  created_by: string
+  created_at: string
+  updated_at: string
+  archived: boolean
+  messages: AiMessage[]
+}
+
+export interface AiUsageTotals {
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number | null
+  latency_ms: number
+}
+
+export interface AiUsageByProvider {
+  provider_id: string
+  provider_name: string | null
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number | null
+}
+
+export interface AiUsageByModel {
+  provider_id: string
+  model_id: string
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number | null
+}
+
+export interface AiUsageByDay {
+  day: string
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number | null
+}
+
+export interface AiUsageByProviderModelDay extends AiUsageByDay {
+  provider_id: string
+  model_id: string
+}
+
+export interface AiUsageReport {
+  totals: AiUsageTotals
+  by_provider: AiUsageByProvider[]
+  by_model: AiUsageByModel[]
+  by_day: AiUsageByDay[]
+  by_provider_model_day: AiUsageByProviderModelDay[]
+}
