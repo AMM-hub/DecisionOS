@@ -153,6 +153,10 @@ def _copy_live_v0_or_build(tmp_path: Path) -> tuple[Path, bool]:
             conn.close()
         if is_v0:
             return target, True
+        # The live database has already been migrated, so it is useless as a v0
+        # fixture. Drop the copy — otherwise the hand-built v0 schema below hits
+        # the copied tables and dies with "table tenant already exists".
+        target.unlink(missing_ok=True)
     return _build_minimal_v0(target), False
 
 

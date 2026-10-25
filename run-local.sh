@@ -84,6 +84,40 @@ API_PID=$!
 wait_for "http://127.0.0.1:$API_PORT/v1/pilots" "tenant_alpha" "API :$API_PORT" 90 || {
   echo "ERROR: analytics API failed to start (see output above)"; exit 1; }
 
+# First run: seed the demo through the public HTTP contract (never direct DB
+# writes). Safe to re-run — seed_demo.py only creates what is missing.
+if [ "${SEED:-1}" != "0" ]; then
+  dataset_count=$("$PY" - "$API_PORT" <<'PYEOF'
+import json, sys, urllib.request
+port = sys.argv[1]
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/v1/datasets?limit=1",
+    headers={"X-Tenant": "tenant_alpha", "X-User": "alpha.manager"},
+)
+try:
+    print(len(json.loads(urllib.request.urlopen(req, timeout=10).read())))
+except Exception:
+    print("?")
+PYEOF
+)
+  if [ "$dataset_count" = "0" ]; then
+    echo "  no datasets yet - seeding the demo..."
+    seed_log="$ROOT/.agents/seed.log"
+    mkdir -p "$ROOT/.agents"
+    # Native Windows python.exe cannot read MSYS paths (/c/Users/...).
+    seed_script="$(cygpath -w "$ROOT/scripts/seed_demo.py" 2>/dev/null || printf '%s' "$ROOT/scripts/seed_demo.py")"
+    if "$PY" "$seed_script" --base-url "http://127.0.0.1:$API_PORT/v1" >"$seed_log" 2>&1; then
+      sed 's/^/    /' "$seed_log"
+      echo "  demo seeded"
+    else
+      sed 's/^/    /' "$seed_log"
+      echo "  WARNING: demo seed failed; the console will show empty states."
+    fi
+  else
+    echo "  datasets present: $dataset_count (skipping seed; SEED=0 to force skip)"
+  fi
+fi
+
 echo "  starting web console..."
 cd "$WEB_DIR" || exit 1
 NUXT_PUBLIC_API_BASE="http://127.0.0.1:$API_PORT/v1" \
