@@ -376,7 +376,7 @@ def test_strict_mode_without_secret_key_refuses_boot(monkeypatch, tmp_path):
 def test_migration_v5_creates_ai_tables(tmp_path):
     from decisionos_analytics.store import Store
 
-    assert max(version for version, _, _ in MIGRATIONS) == 5
+    assert max(version for version, _, _ in MIGRATIONS) == 6
     store = Store(tmp_path / "ai.sqlite3")
     try:
         tables = {
@@ -390,6 +390,6 @@ def test_migration_v5_creates_ai_tables(tmp_path):
             "ai_message",
             "ai_usage",
         } <= tables
-        assert store.conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 5
+        assert store.conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 6
     finally:
         store.close()

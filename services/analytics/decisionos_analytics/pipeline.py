@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from .grain import grain_candidates
 from .objectstore import LocalObjectStore
-from .parsing import ParseOutcome, parse_csv
+from .parsing import ParseError, ParseOutcome, detect_format, parse_file
 from .scanning import formula_risk_cells, scan
 from .store import Store, new_id, now_iso
 
@@ -30,18 +30,22 @@ def process_upload(store: Store, objects: LocalObjectStore, tenant_id: str, uplo
         raise LookupError("upload not found")
 
     data = objects.get_quarantine(row["quarantine_key"])
+    detected_format = detect_format(row["filename"], data)
     verdict = scan(row["filename"], data)
     if verdict.verdict == "rejected":
+        if detected_format == "xlsx" and any("corrupt archive" in reason.lower() for reason in verdict.reasons):
+            raise ParseError("parse_failed", "The uploaded workbook is not a valid xlsx archive.")
         store.conn.execute("UPDATE upload SET status='rejected', scan_result=? WHERE tenant_id=? AND id=?",
                            (json.dumps({"verdict": "rejected", "reasons": verdict.reasons}), tenant_id, upload_id))
         store.conn.commit()
         store.audit(tenant_id, "worker", "upload.scan", upload_id, "rejected", {"reasons": verdict.reasons})
         return {"status": "rejected", "reasons": verdict.reasons}
 
-    outcome: ParseOutcome = parse_csv(data)
+    outcome: ParseOutcome = parse_file(row["filename"], data)
     preview = {
         "upload_id": upload_id,
         "detected": {
+            "format": detected_format,
             "delimiter": outcome.detected_delimiter,
             "encoding": outcome.detected_encoding,
             "header_row": outcome.header_row,
@@ -50,7 +54,12 @@ def process_upload(store: Store, objects: LocalObjectStore, tenant_id: str, uplo
         "columns": outcome.columns,
         "row_count": outcome.row_count,
         "rejected_rows": outcome.rejected_rows,
-        "issues": outcome.issues + [f"formula-injection candidates: {f}" for f in formula_risk_cells(data.decode(outcome.detected_encoding, errors="replace"))[:5]],
+        "issues": outcome.issues
+        + (
+            [f"formula-injection candidates: {f}" for f in formula_risk_cells(data.decode(outcome.detected_encoding, errors="replace"))[:5]]
+            if detected_format == "csv"
+            else []
+        ),
     }
 
     raw_key = objects.retain_raw(row["quarantine_key"])

@@ -14,6 +14,7 @@ import io
 import re
 import time
 from dataclasses import dataclass
+from datetime import date, datetime
 
 import polars as pl
 
@@ -24,9 +25,38 @@ ISO_8601 = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+
 AMBIGUOUS_SLASH_DATE = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}")
 LEADING_ZERO = re.compile(r"^0\d")
 
+XLSX_MAGIC = b"PK\x03\x04"
+LEGACY_XLS_MAGIC = b"\xd0\xcf\x11\xe0"
+
 
 class ParseAbort(Exception):
     pass
+
+
+class ParseError(ParseAbort):
+    """A bounded parse failure with a stable error code."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(detail)
+
+
+def detect_format(filename: str, data: bytes) -> str:
+    """Route by extension *and* magic bytes; never trust the extension alone."""
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if data.startswith(LEGACY_XLS_MAGIC):
+        raise ParseError(
+            "unsupported_format",
+            "Legacy .xls workbooks are not supported; export to .xlsx or .csv.",
+        )
+    if data.startswith(XLSX_MAGIC):
+        return "xlsx"
+    if extension == "xlsx":
+        raise ParseError("parse_failed", "The uploaded workbook is not a valid xlsx archive.")
+    if extension in ("csv", "txt", ""):
+        return "csv"
+    raise ParseError("unsupported_format", f"Unsupported file format '.{extension}'.")
 
 
 @dataclass
@@ -147,3 +177,147 @@ def parse_csv(data: bytes, max_rows: int | None = None, deadline_s: float | None
         issues=issues,
         row_count=frame.height,
     )
+
+
+def _coerce_xlsx_cell(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, (int, float, str)):
+        return value
+    return str(value)
+
+
+def _xlsx_frame(rows: list[list], header: list[str]) -> pl.DataFrame:
+    series: dict[str, pl.Series] = {}
+    for index, name in enumerate(header):
+        values = [row[index] if index < len(row) else None for row in rows]
+        nonnull = [value for value in values if value is not None and value != ""]
+        if nonnull and all(isinstance(value, int) for value in nonnull):
+            dtype = pl.Int64
+        elif nonnull and all(isinstance(value, (int, float)) for value in nonnull):
+            dtype = pl.Float64
+        else:
+            dtype = pl.Utf8
+        if dtype == pl.Utf8:
+            cleaned = [None if value is None or value == "" else str(value) for value in values]
+        else:
+            cleaned = [None if value is None or value == "" else value for value in values]
+        series[name] = pl.Series(name, cleaned, dtype=dtype)
+    return pl.DataFrame(series)
+
+
+def parse_xlsx(
+    data: bytes,
+    sheet_name: str | None = None,
+    max_rows: int | None = None,
+    deadline_s: float | None = None,
+) -> ParseOutcome:
+    """Read the first (or named) worksheet with openpyxl in read-only mode."""
+    t0 = time.monotonic()
+    deadline = deadline_s or LIMITS.max_parse_seconds
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover - dependency is declared
+        raise ParseError("unsupported_format", "xlsx support is not installed.") from exc
+
+    try:
+        workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:  # noqa: BLE001 - any workbook read failure is a 422
+        raise ParseError("parse_failed", "The workbook could not be parsed.") from exc
+
+    try:
+        if not workbook.sheetnames:
+            raise ParseError("parse_failed", "The workbook contains no worksheets.")
+        if sheet_name is not None:
+            if sheet_name not in workbook.sheetnames:
+                raise ParseError("parse_failed", f"Worksheet '{sheet_name}' was not found.")
+            worksheet = workbook[sheet_name]
+        else:
+            worksheet = workbook.worksheets[0]
+
+        raw_rows: list[list] = []
+        header: list[str] | None = None
+        header_row_number = 0
+        for row_number, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
+            if time.monotonic() - t0 > deadline:
+                raise ParseError("parse_failed", "Workbook parsing exceeded the runtime limit.")
+            cells = [_coerce_xlsx_cell(value) for value in row]
+            while cells and cells[-1] is None:
+                cells.pop()
+            if header is None:
+                nonempty = [cell for cell in cells if cell is not None and str(cell).strip() != ""]
+                if len(nonempty) >= 2:
+                    header = []
+                    for index, cell in enumerate(cells):
+                        name = "" if cell is None else str(cell).strip()
+                        header.append(name or f"column_{index + 1}")
+                    header_row_number = row_number
+                continue
+            if len(cells) > len(header):
+                cells = cells[: len(header)]
+            cells.extend([None] * (len(header) - len(cells)))
+            raw_rows.append(cells)
+            limit = max_rows or LIMITS.max_rows
+            if len(raw_rows) > limit:
+                raise ParseError("parse_failed", f"Row limit {limit} exceeded.")
+
+        if header is None:
+            raise ParseError("parse_failed", "No header row with at least two populated cells was found.")
+
+        while raw_rows and all(
+            cell is None or str(cell).strip() == "" for cell in raw_rows[-1]
+        ):
+            raw_rows.pop()
+
+        frame = _xlsx_frame(raw_rows, header)
+        columns_meta = []
+        for name in header:
+            column = frame[name]
+            nulls = int(column.is_null().sum() + (column == "").sum() if column.dtype == pl.Utf8 else column.is_null().sum())
+            sample_values = [str(value) for value in column.drop_nulls().head(3).to_list()]
+            inferred = {pl.Utf8: "string", pl.Int64: "integer", pl.Float64: "float"}[column.dtype]
+            columns_meta.append(
+                {
+                    "name": name,
+                    "inferred_type": inferred,
+                    "null_rate": round(nulls / max(1, frame.height), 4),
+                    "sample": sample_values,
+                }
+            )
+
+        issues = []
+        duplicate_labels = sorted({name for name in header if header.count(name) > 1})
+        if duplicate_labels:
+            issues.append(f"duplicate column labels need mapping, not silent flattening: {duplicate_labels}")
+
+        return ParseOutcome(
+            frame=frame,
+            detected_encoding="xlsx",
+            detected_delimiter="",
+            header_row=header_row_number,
+            dialect_confidence="high",
+            columns=columns_meta,
+            rejected_rows=[],
+            issues=issues,
+            row_count=frame.height,
+        )
+    finally:
+        workbook.close()
+
+
+def parse_file(
+    filename: str,
+    data: bytes,
+    max_rows: int | None = None,
+    deadline_s: float | None = None,
+) -> ParseOutcome:
+    fmt = detect_format(filename, data)
+    if fmt == "xlsx":
+        return parse_xlsx(data, max_rows=max_rows, deadline_s=deadline_s)
+    return parse_csv(data, max_rows=max_rows, deadline_s=deadline_s)

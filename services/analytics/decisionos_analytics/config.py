@@ -1,6 +1,30 @@
 """Resource and safety limits for bounded workers (spec §8.2, §28)."""
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
+
+# services/analytics — the root every relative runtime path is anchored to.
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def resolve_data_dir(explicit: str | Path | None = None) -> Path:
+    """Absolute data directory, identical from any working directory.
+
+    A relative ``DECISIONOS_DATA_DIR`` used to resolve against the process CWD,
+    so the API (started in services/analytics) and the worker (started
+    elsewhere) silently opened *different* SQLite files: the API queued a run
+    into one database and the worker polled the other, reported "idle", and the
+    run stayed `queued` forever. Anchor relative paths to the package root and
+    always hand back an absolute path.
+    """
+    raw: str | Path = (
+        explicit if explicit is not None else os.environ.get("DECISIONOS_DATA_DIR", "./var/worker")
+    )
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = PACKAGE_ROOT / path
+    return path.resolve()
 
 
 @dataclass(frozen=True)

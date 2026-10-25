@@ -695,12 +695,153 @@ def _migration_005_ai_layer(conn: sqlite3.Connection) -> None:
     _execute_script(conn, AI_SCHEMA)
 
 
+def _migration_006_data_foundation(conn: sqlite3.Connection) -> None:
+    """Connectors, ingestion jobs/runs, profiling, and data-quality rules."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_source (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          config_json TEXT NOT NULL DEFAULT '{}',
+          secret_ciphertext TEXT,
+          read_only INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'untested',
+          last_tested_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id),
+          UNIQUE (tenant_id, name)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_source_tenant ON data_source(tenant_id, created_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ingest_job (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          data_source_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          target_table TEXT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'full',
+          watermark_column TEXT,
+          watermark_value TEXT,
+          schedule_cron TEXT,
+          max_rows INTEGER,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id),
+          FOREIGN KEY (tenant_id, data_source_id) REFERENCES data_source(tenant_id, id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ingest_job_tenant ON ingest_job(tenant_id, created_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ingest_run (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          job_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          started_at TEXT,
+          finished_at TEXT,
+          rows_read INTEGER NOT NULL DEFAULT 0,
+          rows_written INTEGER NOT NULL DEFAULT 0,
+          dataset_id TEXT,
+          upload_id TEXT,
+          error TEXT,
+          stats_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id),
+          FOREIGN KEY (tenant_id, job_id) REFERENCES ingest_job(tenant_id, id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ingest_run_tenant ON ingest_run(tenant_id, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ingest_run_job ON ingest_run(tenant_id, job_id, created_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_profile (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          dataset_id TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          column_name TEXT NOT NULL,
+          dtype TEXT NOT NULL,
+          row_count INTEGER NOT NULL,
+          null_count INTEGER NOT NULL,
+          null_rate REAL NOT NULL,
+          distinct_count INTEGER NOT NULL,
+          min_value TEXT,
+          max_value TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_profile_tenant ON data_profile(tenant_id, dataset_id, revision)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quality_rule (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          dataset_id TEXT NOT NULL,
+          column_name TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          params_json TEXT NOT NULL DEFAULT '{}',
+          severity TEXT NOT NULL DEFAULT 'error',
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quality_rule_tenant ON quality_rule(tenant_id, dataset_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quality_result (
+          tenant_id TEXT NOT NULL REFERENCES tenant(id),
+          id TEXT NOT NULL,
+          rule_id TEXT NOT NULL,
+          dataset_id TEXT NOT NULL,
+          run_id TEXT,
+          status TEXT NOT NULL,
+          observed_json TEXT NOT NULL DEFAULT '{}',
+          checked_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quality_result_tenant ON quality_result(tenant_id, dataset_id, checked_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quality_result_rule ON quality_result(tenant_id, rule_id, checked_at)"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "initial_schema", _migration_001_initial_schema),
     (2, "decision_tenant_unique", _migration_002_decision_tenant_unique),
     (3, "evidence_definition_version_nullable", _migration_003_evidence_definition_version_nullable),
     (4, "analysis_artifact", _migration_004_analysis_artifact),
     (5, "ai_layer", _migration_005_ai_layer),
+    (6, "data_foundation", _migration_006_data_foundation),
 ]
 
 

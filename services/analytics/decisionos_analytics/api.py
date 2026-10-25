@@ -11,12 +11,14 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import polars as pl
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -49,6 +51,8 @@ from .artifacts import (
     rerun_artifact,
     update_artifact,
 )
+from .config import resolve_data_dir
+from .connectors import CONNECTORS, ConnectorError, get_connector, redact_config
 from .execution import compile_plan, execute
 from .forecasting import (
     ForecastRefused,
@@ -63,8 +67,11 @@ from .forecasting import (
     predict as forecast_predict,
 )
 from .grain import grain_candidates
+from .ingestion import jobs as ingestion_jobs
 from .objectstore import LocalObjectStore
+from .parsing import ParseError
 from .pipeline import process_upload, publish_revision, sweep_expired_leases
+from .profiling import quality as profiling
 from .security import (
     authenticate_identity,
     create_access_token,
@@ -139,9 +146,10 @@ def _response_error_code(response: Response, status: int) -> str | None:
     return f"http_{status}"
 
 
-def create_app(data_dir: Path) -> FastAPI:
+def create_app(data_dir: Path | None = None) -> FastAPI:
     operations.configure_logging()
     get_jwt_secret()
+    data_dir = resolve_data_dir(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     ensure_configured(data_dir)
     store = Store(data_dir / "control.sqlite3")
@@ -424,7 +432,10 @@ def create_app(data_dir: Path) -> FastAPI:
         if row is None:
             raise HTTPException(404, "not found")
         sweep_expired_leases(store)
-        result = process_upload(store, objects, tenant, upload_id)
+        try:
+            result = process_upload(store, objects, tenant, upload_id)
+        except ParseError as exc:
+            return api_error(422, exc.code, exc.detail)
         if result["status"] == "rejected":
             return {"upload_id": upload_id, "status": "rejected", "scan": {"verdict": "rejected", "reasons": result["reasons"]}}
         return {"upload_id": upload_id, "status": "scanned", "scan": {"verdict": "clean", "reasons": []}, "dataset_id": result["dataset_id"], "revision": result["revision"], "revision_state": result["revision_state"]}
@@ -981,6 +992,25 @@ def create_app(data_dir: Path) -> FastAPI:
     async def analytics_query(request: Request, x_tenant: str = Header(default=None), x_user: str = Header(default=None)):
         tenant, user = ctx(x_tenant, x_user)
         query = AnalyticsQuery.model_validate(await request.json())
+        try:
+            result = run_query(store, objects, tenant, user, query)
+        except AnalyticsQueryError as e:
+            return api_error(e.status, e.code, e.detail)
+        return result.as_dict()
+
+    @app.post("/v1/datasets/{dataset_id}/query")
+    async def dataset_query_api(
+        dataset_id: str,
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        body["dataset_id"] = dataset_id
+        query = AnalyticsQuery.model_validate(body)
         try:
             result = run_query(store, objects, tenant, user, query)
         except AnalyticsQueryError as e:
@@ -3095,6 +3125,414 @@ def create_app(data_dir: Path) -> FastAPI:
             "by_model": [dict(row) for row in by_model],
             "by_day": [dict(row) for row in by_day],
             "by_provider_model_day": [dict(row) for row in by_provider_model_day],
+        }
+
+    # ---- P3a data foundation: connectors --------------------------------
+    def _connector_row(tenant: str, connector_id: str):
+        return store.conn.execute(
+            "SELECT * FROM data_source WHERE tenant_id=? AND id=?", (tenant, connector_id)
+        ).fetchone()
+
+    def _connector_payload(row) -> dict[str, Any]:
+        try:
+            config = json.loads(row["config_json"] or "{}")
+        except (TypeError, ValueError):
+            config = {}
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "config": redact_config(config),
+            "read_only": bool(row["read_only"]),
+            "status": row["status"],
+            "last_tested_at": row["last_tested_at"],
+            "last_error": row["last_error"],
+            "has_secret": bool(row["secret_ciphertext"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _extract_secret(config: dict, supplied: Any) -> tuple[dict, str | None]:
+        cleaned = dict(config)
+        secret = supplied if isinstance(supplied, str) and supplied else None
+        for key in list(cleaned):
+            if not re.search(r"password|secret|token|key", str(key), re.IGNORECASE):
+                continue
+            value = cleaned.pop(key)
+            if secret is None and isinstance(value, str) and value:
+                secret = value
+        dsn = cleaned.get("dsn")
+        if isinstance(dsn, str) and dsn:
+            # Split the DSN instead of discarding it: the connection details are
+            # not secret, only the password is. Previously a password-less DSN
+            # supplied alongside a separate secret was dropped entirely, which
+            # left the stored source with no host to connect to.
+            parsed = urlparse(dsn)
+            if parsed.hostname:
+                cleaned.pop("dsn", None)
+                cleaned.setdefault("host", parsed.hostname)
+                if parsed.port:
+                    cleaned.setdefault("port", parsed.port)
+                database = (parsed.path or "").lstrip("/")
+                if database:
+                    cleaned.setdefault("dbname", database)
+                if parsed.username:
+                    cleaned.setdefault("user", unquote(parsed.username))
+                if parsed.password and secret is None:
+                    secret = unquote(parsed.password)
+        return cleaned, secret
+
+    @app.post("/v1/connectors", status_code=201)
+    async def create_connector_api(
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        body = await request.json()
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return api_error(422, "missing_field", "Field 'name' is required.")
+        kind = body.get("kind")
+        if kind not in CONNECTORS:
+            return api_error(422, "unsupported_kind", f"Unsupported connector kind '{kind}'.")
+        config = body.get("config", {})
+        if not isinstance(config, dict):
+            return api_error(422, "invalid_value", "Field 'config' must be an object.")
+        cleaned, secret = _extract_secret(config, body.get("secret"))
+        read_only = bool(body.get("read_only", True))
+        try:
+            CONNECTORS[kind](config=cleaned, secret=secret, read_only=read_only)
+        except ConnectorError as exc:
+            return api_error(422, "invalid_config", str(exc))
+        except (TypeError, ValueError):
+            return api_error(422, "invalid_config", "Connector configuration is invalid.")
+        connector_id = f"src-{new_id()[:12]}"
+        timestamp = now_iso()
+        try:
+            store.execute_with_retry(
+                """INSERT INTO data_source(
+                    tenant_id, id, name, kind, config_json, secret_ciphertext, read_only,
+                    status, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    tenant,
+                    connector_id,
+                    name.strip(),
+                    kind,
+                    json.dumps(cleaned),
+                    encrypt_secret(secret) if secret else None,
+                    1 if read_only else 0,
+                    "untested",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            return api_error(409, "connector_exists", "A connector with this name already exists.")
+        store.audit(tenant, user, "data_source.create", connector_id, "success", {"kind": kind})
+        return _connector_payload(_connector_row(tenant, connector_id))
+
+    @app.get("/v1/connectors")
+    async def list_connectors_api(
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        rows = store.conn.execute(
+            "SELECT * FROM data_source WHERE tenant_id=? ORDER BY name ASC", (tenant,)
+        ).fetchall()
+        return [_connector_payload(row) for row in rows]
+
+    @app.get("/v1/connectors/{connector_id}")
+    async def get_connector_api(
+        connector_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        row = _connector_row(tenant, connector_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        return _connector_payload(row)
+
+    @app.delete("/v1/connectors/{connector_id}")
+    async def delete_connector_api(
+        connector_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        row = _connector_row(tenant, connector_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        try:
+            with store.conn:
+                store.conn.execute(
+                    "DELETE FROM data_source WHERE tenant_id=? AND id=?", (tenant, connector_id)
+                )
+        except sqlite3.IntegrityError:
+            return api_error(409, "connector_in_use", "Delete the connector's ingest jobs first.")
+        store.audit(tenant, user, "data_source.delete", connector_id, "success", {})
+        return {"deleted": True, "id": connector_id}
+
+    @app.post("/v1/connectors/{connector_id}/test")
+    async def test_connector_api(
+        connector_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        row = _connector_row(tenant, connector_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        try:
+            connector = get_connector(row)
+            probe = await run_in_threadpool(connector.test_connection)
+        except ConnectorError as exc:
+            safe = str(exc)
+            store.execute_with_retry(
+                "UPDATE data_source SET status='error', last_error=?, last_tested_at=?, updated_at=? "
+                "WHERE tenant_id=? AND id=?",
+                (safe, now_iso(), now_iso(), tenant, connector_id),
+            )
+            store.audit(tenant, user, "data_source.test", connector_id, "failed", {"error": safe})
+            return api_error(422, "connector_error", safe)
+        store.execute_with_retry(
+            "UPDATE data_source SET status='connected', last_error=NULL, last_tested_at=?, updated_at=? "
+            "WHERE tenant_id=? AND id=?",
+            (now_iso(), now_iso(), tenant, connector_id),
+        )
+        store.audit(tenant, user, "data_source.test", connector_id, "success", {})
+        return probe
+
+    @app.get("/v1/connectors/{connector_id}/tables")
+    async def connector_tables_api(
+        connector_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        row = _connector_row(tenant, connector_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        try:
+            tables = await run_in_threadpool(get_connector(row).list_tables)
+        except ConnectorError as exc:
+            return api_error(422, "connector_error", str(exc))
+        return [
+            {"schema": table.schema, "name": table.name, "kind": table.kind}
+            for table in tables
+        ]
+
+    @app.get("/v1/connectors/{connector_id}/tables/{table:path}/preview")
+    async def connector_preview_api(
+        connector_id: str,
+        table: str,
+        limit: int = Query(default=50, ge=1, le=500),
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        row = _connector_row(tenant, connector_id)
+        if row is None:
+            raise HTTPException(404, "not found")
+        try:
+            connector = get_connector(row)
+            columns, rows = await run_in_threadpool(connector.read_rows, table, None, limit, 0)
+        except ConnectorError as exc:
+            return api_error(422, "connector_error", str(exc))
+        return {
+            "connector_id": connector_id,
+            "table": table,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "limit": limit,
+        }
+
+    # ---- P3a data foundation: ingestion jobs ----------------------------
+    @app.post("/v1/jobs", status_code=201)
+    async def create_ingest_job_api(
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        body = await request.json()
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        try:
+            job = ingestion_jobs.create_job(
+                store,
+                tenant,
+                body.get("data_source_id"),
+                body.get("name"),
+                body.get("target_table"),
+                mode=body.get("mode", "full"),
+                watermark_column=body.get("watermark_column"),
+                watermark_value=body.get("watermark_value"),
+                schedule_cron=body.get("schedule_cron"),
+                max_rows=body.get("max_rows"),
+            )
+        except ingestion_jobs.JobError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        store.audit(tenant, user, "ingest.job.create", job["id"], "success", {})
+        return job
+
+    @app.get("/v1/jobs")
+    async def list_ingest_jobs_api(
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        return ingestion_jobs.list_jobs(store, tenant)
+
+    @app.get("/v1/jobs/{job_id}")
+    async def get_ingest_job_api(
+        job_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        try:
+            job = ingestion_jobs.get_job(store, tenant, job_id)
+            runs = ingestion_jobs.list_runs(store, tenant, job_id)
+        except ingestion_jobs.JobError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        return {**job, "latest_run": runs[0] if runs else None}
+
+    @app.post("/v1/jobs/{job_id}/run", status_code=202)
+    async def enqueue_ingest_run_api(
+        job_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        try:
+            enqueued = ingestion_jobs.enqueue_run(store, tenant, job_id)
+        except ingestion_jobs.JobError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        store.audit(tenant, user, "ingest.run.enqueue", enqueued["run_id"], "success", {"job_id": job_id})
+        return enqueued
+
+    @app.get("/v1/jobs/{job_id}/runs")
+    async def list_ingest_runs_api(
+        job_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        try:
+            return ingestion_jobs.list_runs(store, tenant, job_id)
+        except ingestion_jobs.JobError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+
+    # ---- P3a data foundation: profiling & quality ----------------------
+    @app.post("/v1/datasets/{dataset_id}/quality-rules", status_code=201)
+    async def create_quality_rule_api(
+        dataset_id: str,
+        request: Request,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        body = await request.json()
+        if not isinstance(body, dict):
+            return api_error(422, "invalid_value", "Request body must be an object.")
+        try:
+            rule = profiling.create_rule(
+                store,
+                tenant,
+                dataset_id,
+                body.get("column_name"),
+                body.get("kind"),
+                body.get("params", {}),
+                body.get("severity", "error"),
+            )
+        except profiling.QualityError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        store.audit(tenant, user, "quality.rule.create", rule["id"], "success", {})
+        return rule
+
+    @app.get("/v1/datasets/{dataset_id}/quality-rules")
+    async def list_quality_rules_api(
+        dataset_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        try:
+            return profiling.list_rules(store, tenant, dataset_id)
+        except profiling.QualityError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+
+    @app.delete("/v1/datasets/{dataset_id}/quality-rules/{rule_id}")
+    async def delete_quality_rule_api(
+        dataset_id: str,
+        rule_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        try:
+            profiling.delete_rule(store, tenant, dataset_id, rule_id)
+        except profiling.QualityError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        store.audit(tenant, user, "quality.rule.delete", rule_id, "success", {})
+        return {"deleted": True, "id": rule_id}
+
+    @app.get("/v1/datasets/{dataset_id}/quality")
+    async def dataset_quality_api(
+        dataset_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, _ = ctx(x_tenant, x_user)
+        try:
+            revision, profiles = profiling.profile_rows(store, tenant, dataset_id)
+            rules = profiling.latest_results(store, tenant, dataset_id)
+        except profiling.QualityError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        return {
+            "dataset_id": dataset_id,
+            "revision": revision,
+            "profile": profiles,
+            "rules": rules,
+        }
+
+    @app.post("/v1/datasets/{dataset_id}/profile")
+    async def recompute_profile_api(
+        dataset_id: str,
+        x_tenant: str = Header(default=None),
+        x_user: str = Header(default=None),
+    ):
+        tenant, user = ctx(x_tenant, x_user, permission="write")
+        row = store.conn.execute(
+            "SELECT published_revision FROM dataset WHERE tenant_id=? AND id=?", (tenant, dataset_id)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "not found")
+        if row["published_revision"] is None:
+            return api_error(409, "no_published_revision", "No published revision exists for this dataset.")
+        try:
+            profiles = profiling.profile_dataset(
+                store, dataset_id, int(row["published_revision"]), tenant_id=tenant
+            )
+            # "Recompute now" must leave the quality view usable: evaluating the
+            # dataset's rules here is what turns a freshly added rule from
+            # `latest_result: null` into a real pass/fail with observed counts.
+            results = profiling.evaluate_rules(store, dataset_id, tenant_id=tenant)
+        except profiling.QualityError as exc:
+            return api_error(exc.status, exc.code, exc.detail)
+        store.audit(tenant, user, "dataset.profile", dataset_id, "success", {})
+        return {
+            "dataset_id": dataset_id,
+            "revision": row["published_revision"],
+            "profile": profiles,
+            "results": results,
         }
 
     app.state.store = store
