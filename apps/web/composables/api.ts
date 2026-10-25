@@ -1,4 +1,18 @@
-import type { ApiErrorBody } from '~/shared/types'
+import type {
+  ApiErrorBody,
+  ConnectorTable,
+  ConnectorTestResult,
+  CreateDataSourceRequest,
+  CreateIngestJobRequest,
+  CreateQualityRuleRequest,
+  DataSource,
+  DatasetQualityResponse,
+  IngestJob,
+  IngestRun,
+  QualityRule,
+  RunEnqueueResponse,
+  TablePreview,
+} from '~/shared/types'
 
 export class ApiError extends Error implements ApiErrorBody {
   status: number
@@ -124,5 +138,46 @@ export function useApi() {
     return `${status}: ${raw.slice(0, 200)}`
   }
 
-  return { base, user, headers, call, get, post, postWithKey, putBytes }
+  // ---- data workspace (P3b) -----------------------------------------------
+  // Typed wrappers for the data foundation endpoints. They keep the shared
+  // ApiError contract (status/code/detail) so pages can map 422s to fields.
+  const dataApi = {
+    sources: {
+      list: () => get<DataSource[]>('/connectors'),
+      getById: (id: string) => get<DataSource>(`/connectors/${id}`),
+      create: (body: CreateDataSourceRequest) => post<DataSource>('/connectors', body),
+      remove: (id: string) =>
+        call<{ deleted: boolean; id: string }>(`/connectors/${id}`, { method: 'DELETE' }),
+      test: (id: string) => post<ConnectorTestResult>(`/connectors/${id}/test`),
+      tables: (id: string) => get<ConnectorTable[]>(`/connectors/${id}/tables`),
+      preview: (id: string, table: string, limit = 50) =>
+        get<TablePreview>(
+          `/connectors/${id}/tables/${encodeURIComponent(table)}/preview?limit=${limit}`,
+        ),
+    },
+    jobs: {
+      list: () => get<IngestJob[]>('/jobs'),
+      getById: (id: string) => get<IngestJob>(`/jobs/${id}`),
+      create: (body: CreateIngestJobRequest) => post<IngestJob>('/jobs', body),
+      run: (id: string) => post<RunEnqueueResponse>(`/jobs/${id}/run`),
+      runs: (id: string) => get<IngestRun[]>(`/jobs/${id}/runs`),
+    },
+    quality: {
+      get: (datasetId: string) =>
+        get<DatasetQualityResponse>(`/datasets/${datasetId}/quality`),
+      listRules: (datasetId: string) =>
+        get<QualityRule[]>(`/datasets/${datasetId}/quality-rules`),
+      createRule: (datasetId: string, body: CreateQualityRuleRequest) =>
+        post<QualityRule>(`/datasets/${datasetId}/quality-rules`, body),
+      deleteRule: (datasetId: string, ruleId: string) =>
+        call<{ deleted: boolean; id: string }>(
+          `/datasets/${datasetId}/quality-rules/${ruleId}`,
+          { method: 'DELETE' },
+        ),
+      profile: (datasetId: string) =>
+        post<DatasetQualityResponse>(`/datasets/${datasetId}/profile`),
+    },
+  }
+
+  return { base, user, headers, call, get, post, postWithKey, putBytes, dataApi }
 }

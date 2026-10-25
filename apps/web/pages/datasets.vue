@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { Dataset, GrainCandidate, PublishResponse } from '~/shared/types'
+import { t, useLocale } from '~/composables/locale'
 
 const { get, post } = useApi()
+const { locale } = useLocale()
 
 const datasets = ref<Dataset[]>([])
 const loading = ref(false)
@@ -83,6 +85,13 @@ function stateBadge(s: Dataset['latest_revision_state']) {
         <span :class="['badge', d.grain_confirmed ? 'ok' : 'warn']">{{ d.grain_confirmed ? 'grain confirmed' : 'grain unconfirmed' }}</span>
         <span :class="['badge', stateBadge(d.latest_revision_state)]">rev {{ d.latest_revision }} · {{ d.latest_revision_state }}</span>
         <span v-if="d.revision != null" class="badge ok">published rev {{ d.revision }}</span>
+        <NuxtLink
+          v-if="d.revision != null"
+          class="badge blue"
+          :to="`/data?dataset=${d.dataset_id}`"
+        >
+          {{ t('data.qualityLink', locale) }}
+        </NuxtLink>
       </template>
 
       <p class="muted">

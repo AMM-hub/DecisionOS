@@ -46,6 +46,7 @@ const routeTitle = computed(() => {
   if (p === '/workflow') return t('nav.workflow', locale.value)
   if (p === '/scenarios') return t('nav.scenarios', locale.value)
   if (p === '/datasets') return t('nav.datasets', locale.value)
+  if (p === '/data') return t('nav.data', locale.value)
   if (p === '/metrics') return t('nav.metrics', locale.value)
   if (p === '/studio') return t('nav.studio', locale.value)
   if (p === '/intelligence') return t('nav.intelligence', locale.value)
@@ -157,6 +158,10 @@ function closeMobileNav() {
           <!-- Data Foundation Group -->
           <div class="nav-group">
             <span class="nav-label">{{ t('nav.groupData', locale) }}</span>
+            <NuxtLink to="/data" class="nav-item" @click="closeMobileNav">
+              <svg class="ico"><use href="#i-database"/></svg>
+              <span>{{ t('nav.data', locale) }}</span>
+            </NuxtLink>
             <NuxtLink to="/datasets" class="nav-item" @click="closeMobileNav">
               <svg class="ico"><use href="#i-layers"/></svg>
               <span>{{ t('nav.datasets', locale) }}</span>

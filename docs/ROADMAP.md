@@ -40,7 +40,7 @@ grep -R "18.5\|94.2%\|T+38h" services/analytics/decisionos_analytics apps/web/pa
 # 2. Real query endpoint exists and computes a known aggregate
 curl -s -X POST http://127.0.0.1:8100/v1/datasets/$DS/query \
   -H 'X-Tenant: tenant_alpha' -H 'X-User: alpha.manager' -H 'Content-Type: application/json' \
-  -d '{"select":["status"],"aggregate":[{"fn":"count","as":"n"}],"group_by":["status"],"limit":100}' \
+  -d '{"dimensions":["status"],"measures":[{"column":"*","agg":"count","alias":"n"}],"limit":100}' \
   | python -c "import json,sys;d=json.load(sys.stdin);assert d['rows'],d;print(d['evidence_ref'])"
 
 # 3. Backend + frontend suites

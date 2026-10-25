@@ -1032,3 +1032,163 @@ export interface AiUsageReport {
   by_day: AiUsageByDay[]
   by_provider_model_day: AiUsageByProviderModelDay[]
 }
+
+// ---- data workspace (P3b) --------------------------------------------------
+export type DataSourceKind = 'postgres' | 'rest'
+
+export type DataSourceStatus = 'untested' | 'connected' | 'failed' | 'error'
+
+export interface DataSource {
+  id: string
+  name: string
+  kind: DataSourceKind | string
+  config: Record<string, unknown>
+  read_only: boolean
+  status: DataSourceStatus | string
+  last_tested_at: string | null
+  last_error: string | null
+  has_secret: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateDataSourceRequest {
+  name: string
+  kind: DataSourceKind
+  config: Record<string, unknown>
+  secret?: string
+  read_only?: boolean
+}
+
+export interface ConnectorTestResult {
+  status: 'connected'
+  latency_ms: number
+  server_version: string | null
+}
+
+export interface ConnectorTable {
+  schema: string
+  name: string
+  kind: string
+}
+
+export interface TablePreview {
+  connector_id?: string
+  table?: string
+  columns: string[]
+  rows: Array<Array<unknown>>
+  row_count?: number
+  limit?: number
+  truncated?: boolean
+}
+
+export type IngestRunStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export interface IngestRun {
+  id: string
+  job_id?: string
+  status: IngestRunStatus | string
+  started_at: string | null
+  finished_at: string | null
+  rows_read: number
+  rows_written: number
+  dataset_id: string | null
+  upload_id?: string | null
+  error: string | null
+  stats?: Record<string, unknown>
+  created_at?: string
+}
+
+export interface IngestJob {
+  id: string
+  data_source_id: string
+  name: string
+  target_table: string
+  mode: 'full' | 'incremental' | string
+  watermark_column: string | null
+  watermark_value: string | null
+  schedule_cron: string | null
+  max_rows: number | null
+  status: string
+  created_at: string
+  updated_at: string
+  latest_run?: IngestRun | null
+}
+
+export interface CreateIngestJobRequest {
+  data_source_id: string
+  name: string
+  target_table: string
+  mode: 'full' | 'incremental'
+  watermark_column?: string | null
+  max_rows?: number | null
+}
+
+export interface RunEnqueueResponse {
+  run_id: string
+  status: 'queued'
+}
+
+export type QualityRuleKind = 'not_null' | 'unique' | 'range' | 'regex'
+export type QualitySeverity = 'error' | 'warn' | 'info'
+export type QualityResultStatus = 'pass' | 'fail' | 'error'
+
+export interface QualityRuleParams {
+  min?: number | null
+  max?: number | null
+  pattern?: string
+}
+
+export interface QualityRule {
+  id: string
+  dataset_id: string
+  column_name: string
+  kind: QualityRuleKind | string
+  params: QualityRuleParams
+  severity: QualitySeverity | string
+  created_at: string
+}
+
+export interface CreateQualityRuleRequest {
+  column_name: string
+  kind: QualityRuleKind
+  params?: QualityRuleParams
+  severity?: QualitySeverity
+}
+
+export interface QualityRuleResult {
+  id?: string
+  status: QualityResultStatus
+  observed: {
+    violations?: number
+    checked?: number
+    error?: string
+  }
+  checked_at: string
+  run_id?: string | null
+}
+
+export interface QualityRuleState {
+  rule: QualityRule
+  latest_result: QualityRuleResult | null
+}
+
+export interface DataProfileColumn {
+  column_name: string
+  dtype: string
+  row_count: number
+  null_count: number
+  null_rate: number
+  distinct_count: number
+  min_value: string | number | null
+  max_value: string | number | null
+  created_at?: string
+}
+
+export interface DatasetQualityResponse {
+  dataset_id: string
+  revision: number
+  profile: DataProfileColumn[]
+  rules?: QualityRuleState[]
+  results?: QualityRuleState[]
+}

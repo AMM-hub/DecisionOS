@@ -23,6 +23,26 @@ export DECISIONOS_DATA_DIR="${DECISIONOS_DATA_DIR:-./var/worker}"
 # box). That breaks the project venv with a pydantic_core import error. Scrub it.
 unset PYTHONPATH PYTHONHOME
 
+# Connector credentials are encrypted at rest with a key derived from
+# DECISIONOS_SECRET_KEY. If the API and the worker derive different keys, ingest
+# jobs fail with "credential could not be decrypted" while everything else looks
+# healthy. Pin one key for this launch and export it so every process started
+# from here (uvicorn, the worker, ad-hoc `--once` runs via this script) agrees.
+if [ -z "${DECISIONOS_SECRET_KEY:-}" ]; then
+  key_file="$ROOT/.agents/local-secret-key"
+  if [ -f "$key_file" ]; then
+    DECISIONOS_SECRET_KEY="$(cat "$key_file")"
+  else
+    mkdir -p "$ROOT/.agents"
+    DECISIONOS_SECRET_KEY="$("$PY" -c 'import secrets; print(secrets.token_hex(32))')"
+    printf '%s' "$DECISIONOS_SECRET_KEY" > "$key_file"
+  fi
+  echo "  secret  : generated/loaded $key_file (shared by API and worker)"
+else
+  echo "  secret  : using DECISIONOS_SECRET_KEY from the environment"
+fi
+export DECISIONOS_SECRET_KEY
+
 API_PID=""
 WEB_PID=""
 KILLED=0
